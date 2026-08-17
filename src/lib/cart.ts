@@ -4,7 +4,7 @@ export type CartItem = {
   id: string;
   product: Product;
   quantity: number;
-  note?: string;
+  note?: string | undefined;
   supplements: { id: string; label: string; price: number }[];
 };
 
