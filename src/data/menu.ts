@@ -9,7 +9,7 @@ import coca from "@/assets/coca.jpg";
 import eau from "@/assets/eau.jpg";
 import tiramisu from "@/assets/tiramisu.jpg";
 
-export type Category = "Tous" | "Pizzas" | "Burgers" | "Plats" | "Boissons" | "Desserts";
+export type Category = string;
 
 export const categories: Category[] = [
   "Tous",
@@ -20,14 +20,22 @@ export const categories: Category[] = [
   "Desserts",
 ];
 
+export type ProductOption = {
+  label: string;   // ex: "S", "M", "L", "XL", "Petit", "Grand"
+  price: number;   // prix total de cette option (remplace le prix de base)
+};
+
 export type Product = {
   id: string;
   name: string;
   category: Exclude<Category, "Tous">;
-  price: number;
+  price: number;               // prix de base (affiché si aucune option)
   image: string;
   available: boolean;
+  options?: ProductOption[];   // options de taille/variante (optionnel)
+  ingredients?: string;        // liste d'ingrédients (optionnel)
 };
+
 
 export type Supplement = { id: string; label: string; price: number };
 

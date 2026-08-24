@@ -1,4 +1,4 @@
-import type { Product } from "@/data/menu";
+import type { Product, ProductOption } from "@/data/menu";
 
 export type CartItem = {
   id: string;
@@ -6,11 +6,14 @@ export type CartItem = {
   quantity: number;
   note?: string | undefined;
   supplements: { id: string; label: string; price: number }[];
+  selectedOption?: ProductOption; // option choisie (taille/variante)
 };
 
 export function lineTotal(item: CartItem) {
   const extras = item.supplements.reduce((sum, s) => sum + s.price, 0);
-  return (item.product.price + extras) * item.quantity;
+  // Si une option est sélectionnée, son prix remplace le prix de base du produit
+  const basePrice = item.selectedOption ? item.selectedOption.price : item.product.price;
+  return (basePrice + extras) * item.quantity;
 }
 
 export function cartSubtotal(items: CartItem[]) {

@@ -1,12 +1,12 @@
 import type { Category } from "@/data/menu";
-import { categories } from "@/data/menu";
 
 type CategoryTabsProps = {
   active: Category;
   onChange: (category: Category) => void;
+  categories: string[]; // liste dynamique : ["Tous", "Pizzas", ...]
 };
 
-export function CategoryTabs({ active, onChange }: CategoryTabsProps) {
+export function CategoryTabs({ active, onChange, categories }: CategoryTabsProps) {
   return (
     <div className="flex flex-wrap gap-2">
       {categories.map((category) => (

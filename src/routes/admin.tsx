@@ -1,0 +1,100 @@
+import { createFileRoute } from "@tanstack/react-router";
+import { useState } from "react";
+import { ChefHat, Utensils, Armchair, BarChart3, Menu, X } from "lucide-react";
+import { MenuManager } from "@/components/admin/MenuManager";
+import { TableManager } from "@/components/admin/TableManager";
+import { ZReport } from "@/components/admin/ZReport";
+
+export const Route = createFileRoute("/admin")({
+  component: AdminPage,
+});
+
+type Tab = "menu" | "tables" | "rapport";
+
+const navItems = [
+  { id: "menu"    as const, icon: Utensils,  label: "Gestion du Menu" },
+  { id: "tables"  as const, icon: Armchair,  label: "Gestion des Tables" },
+  { id: "rapport" as const, icon: BarChart3, label: "Rapport Z" },
+];
+
+function AdminPage() {
+  const [activeTab, setActiveTab] = useState<Tab>("menu");
+  const [isOpen, setIsOpen] = useState(true);
+
+  return (
+    <div className="flex h-screen w-full overflow-hidden bg-background font-sans">
+
+      {/* ── SIDEBAR ── */}
+      <aside
+        className={`flex-col bg-sidebar text-sidebar-foreground border-r border-border transition-all duration-300 ${isOpen ? "flex w-60" : "hidden"}`}
+      >
+        {/* Logo */}
+        <div className="flex h-16 shrink-0 items-center gap-3 border-b border-sidebar-border px-5">
+          <div className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-primary">
+            <ChefHat className="h-5 w-5 text-primary-foreground" />
+          </div>
+          <span className="text-sm font-extrabold uppercase tracking-tight">Admin CPanel</span>
+        </div>
+
+        {/* Nav */}
+        <nav className="mt-4 flex flex-1 flex-col gap-1 px-3">
+          {navItems.map(({ id, icon: Icon, label }) => (
+            <button
+              key={id}
+              onClick={() => setActiveTab(id)}
+              className={`flex w-full items-center gap-3 rounded-lg px-3 py-3 text-sm font-medium transition-colors ${
+                activeTab === id
+                  ? "bg-primary text-primary-foreground shadow"
+                  : "text-sidebar-foreground/60 hover:bg-sidebar-accent hover:text-sidebar-foreground"
+              }`}
+            >
+              <Icon className="h-5 w-5 shrink-0" />
+              {label}
+            </button>
+          ))}
+        </nav>
+
+        {/* Close button at the bottom */}
+        <div className="border-t border-sidebar-border p-3">
+          <button
+            onClick={() => setIsOpen(false)}
+            className="flex w-full items-center gap-3 rounded-lg px-3 py-3 text-sm font-medium text-sidebar-foreground/60 transition-colors hover:bg-sidebar-accent hover:text-sidebar-foreground"
+          >
+            <X className="h-5 w-5 shrink-0" />
+            <span>Fermer le panneau</span>
+          </button>
+        </div>
+      </aside>
+
+      {/* ── MAIN CONTENT ── */}
+      <main className="flex min-w-0 flex-1 flex-col overflow-hidden">
+
+        {/* Top bar */}
+        <header className="flex h-16 shrink-0 items-center gap-4 border-b border-border bg-card px-5">
+          {/* Open button — only visible when sidebar is closed */}
+          {!isOpen && (
+            <button
+              onClick={() => setIsOpen(true)}
+              className="grid h-10 w-10 shrink-0 place-items-center rounded-lg border border-border bg-background text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+              aria-label="Ouvrir le panneau"
+            >
+              <Menu className="h-5 w-5" />
+            </button>
+          )}
+          <h1 className="text-lg font-semibold">
+            {activeTab === "menu"    && "Gestion du Menu"}
+            {activeTab === "tables"  && "Gestion des Tables"}
+            {activeTab === "rapport" && "Rapport Z"}
+          </h1>
+        </header>
+
+        {/* Content */}
+        <div className="flex-1 overflow-hidden">
+          {activeTab === "menu"    && <MenuManager />}
+          {activeTab === "tables"  && <TableManager />}
+          {activeTab === "rapport" && <ZReport />}
+        </div>
+      </main>
+    </div>
+  );
+}

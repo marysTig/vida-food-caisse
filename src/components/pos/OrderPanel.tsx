@@ -26,7 +26,7 @@ export function OrderPanel({
   const subtotal = cartSubtotal(items);
 
   return (
-    <aside className="flex w-full shrink-0 flex-col border-l border-border bg-background md:w-[330px] lg:w-[35%] lg:max-w-[420px]">
+    <aside className="hidden md:flex w-full shrink-0 flex-col border-l border-border bg-background md:w-[330px] lg:w-[35%] lg:max-w-[420px]">
       <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3 border-b border-border bg-card px-4 py-3">
         <div className="min-w-0">
           <h2 className="truncate text-base font-bold text-foreground">Commande</h2>

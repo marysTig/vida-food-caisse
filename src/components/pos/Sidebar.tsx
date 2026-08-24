@@ -1,25 +1,28 @@
 import {
   ChefHat,
-  ClipboardList,
-  CreditCard,
   LogOut,
-  Receipt,
   Settings,
   Armchair,
   BarChart3,
+  Utensils,
 } from "lucide-react";
+import { Link, useRouterState } from "@tanstack/react-router";
 
 const nav = [
-  { label: "Caisse", icon: Receipt, active: true },
-  { label: "Tables", icon: Armchair, active: false },
-  { label: "Commandes", icon: ClipboardList, active: false },
-  { label: "Crédits", icon: CreditCard, active: false },
-  { label: "Rapports", icon: BarChart3, active: false },
+  { label: "Tables",                icon: Armchair,  to: "/tables" },
+  { label: "Menu",                  icon: Utensils,  to: "/" },
+  { label: "Rapport",               icon: BarChart3, to: "/rapports" },
 ];
 
-export function Sidebar() {
+type SidebarProps = {
+  activePage?: string;
+};
+
+export function Sidebar(_props: SidebarProps) {
+  const location = useRouterState({ select: s => s.location.pathname });
+
   return (
-    <aside className="flex w-[76px] shrink-0 flex-col bg-sidebar text-sidebar-foreground lg:w-[220px]">
+    <aside className="hidden lg:flex w-[76px] shrink-0 flex-col bg-sidebar text-sidebar-foreground lg:w-[220px]">
       <div className="flex h-16 items-center gap-3 px-4 lg:px-5">
         <div className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-primary">
           <ChefHat className="h-5 w-5 text-primary-foreground" />
@@ -29,21 +32,26 @@ export function Sidebar() {
         </span>
       </div>
 
-      <nav className="mt-2 flex flex-1 flex-col gap-1 px-2 lg:px-3">
-        {nav.map((item) => (
-          <button
-            key={item.label}
-            type="button"
-            className={
-              item.active
-                ? "flex items-center gap-3 rounded-lg bg-primary px-3 py-3 text-sm font-semibold text-primary-foreground"
-                : "flex items-center gap-3 rounded-lg px-3 py-3 text-sm font-medium text-sidebar-foreground/60 transition-colors hover:bg-sidebar-accent hover:text-sidebar-foreground"
-            }
-          >
-            <item.icon className="h-5 w-5 shrink-0" />
-            <span className="hidden truncate lg:block">{item.label}</span>
-          </button>
-        ))}
+      <nav className="mt-2 flex flex-1 flex-col px-2 lg:px-3">
+        <div className="flex flex-1 flex-col justify-center gap-1">
+          {nav.map((item) => {
+            const active = location === item.to;
+            return (
+              <Link
+                key={item.label}
+                to={item.to}
+                className={
+                  active
+                    ? "flex items-center gap-3 rounded-lg bg-primary px-3 py-3 text-sm font-semibold text-primary-foreground"
+                    : "flex items-center gap-3 rounded-lg px-3 py-3 text-sm font-medium text-sidebar-foreground/60 transition-colors hover:bg-sidebar-accent hover:text-sidebar-foreground"
+                }
+              >
+                <item.icon className="h-5 w-5 shrink-0" />
+                <span className="hidden truncate lg:block">{item.label}</span>
+              </Link>
+            );
+          })}
+        </div>
 
         <div className="my-3 h-px bg-sidebar-border" />
 

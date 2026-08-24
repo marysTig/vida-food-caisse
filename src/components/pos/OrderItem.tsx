@@ -15,9 +15,12 @@ export function OrderItem({ item, onIncrease, onDecrease, onRemove, onEdit }: Or
     <div className="rounded-xl border border-border bg-card p-3">
       <div className="grid grid-cols-[minmax(0,1fr)_auto] items-start gap-2">
         <div className="min-w-0">
-          <p className="truncate text-sm font-semibold text-foreground">{item.product.name}</p>
+          <p className="truncate text-sm font-semibold text-foreground">
+            {item.product.name}
+            {item.selectedOption && <span className="ml-1 font-normal text-muted-foreground">({item.selectedOption.label})</span>}
+          </p>
           <p className="text-xs text-muted-foreground">
-            {item.quantity} × {formatDA(item.product.price)}
+            {item.quantity} × {formatDA(item.selectedOption ? item.selectedOption.price : item.product.price)}
           </p>
           {item.supplements.length > 0 && (
             <p className="mt-1 truncate text-xs text-primary">
