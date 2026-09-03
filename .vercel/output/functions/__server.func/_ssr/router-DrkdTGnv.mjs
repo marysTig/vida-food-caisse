@@ -22,7 +22,7 @@ var __exportAll = (all, no_symbols) => {
 	return target;
 };
 //#endregion
-//#region node_modules/.nitro/vite/services/ssr/assets/router-1yb7JpPf.js
+//#region node_modules/.nitro/vite/services/ssr/assets/router-DrkdTGnv.js
 var import_react = /* @__PURE__ */ __toESM(require_react());
 var import_jsx_runtime = require_jsx_runtime();
 var useTableGlobalState = create((set) => ({
@@ -80,6 +80,7 @@ async function reloadTableStore(isInitialLoad = false) {
 }
 var _initialized$1 = false;
 async function _initTableSync() {
+	if (typeof window === "undefined") return;
 	if (_initialized$1) return;
 	try {
 		await reloadTableStore(true);
@@ -313,6 +314,7 @@ var useTableOrdersStore = create((set, get) => ({
 }));
 var _initialized = false;
 async function _initTableOrdersSync() {
+	if (typeof window === "undefined") return;
 	if (_initialized) return;
 	try {
 		const { data, error } = await supabase.from("table_orders").select("table_id, items, note");
@@ -601,9 +603,9 @@ var Route$4 = createFileRoute("/")({
 	},
 	component: lazyRouteComponent($$splitComponentImporter$4, "component")
 });
-var $$splitComponentImporter$3 = () => import("./admin-CD0r8Tat.mjs");
+var $$splitComponentImporter$3 = () => import("./admin-DIQlWJqL.mjs");
 var Route$3 = createFileRoute("/admin")({ component: lazyRouteComponent($$splitComponentImporter$3, "component") });
-var $$splitComponentImporter$2 = () => import("./emporter-BEABOBLt.mjs");
+var $$splitComponentImporter$2 = () => import("./emporter-BP-gTAOo.mjs");
 var Route$2 = createFileRoute("/emporter")({
 	head: () => ({ meta: [{ title: "Emporter — La Vida Food" }] }),
 	component: lazyRouteComponent($$splitComponentImporter$2, "component")
@@ -619,7 +621,7 @@ var Route$1 = createFileRoute("/serveur")({
 	},
 	component: lazyRouteComponent($$splitComponentImporter$1, "component")
 });
-var $$splitComponentImporter = () => import("./tables-CiLHtV2v.mjs");
+var $$splitComponentImporter = () => import("./tables-DTW0bsSf.mjs");
 var Route = createFileRoute("/tables")({
 	head: () => ({ meta: [{ title: "Tables — La Vida Food" }] }),
 	component: lazyRouteComponent($$splitComponentImporter, "component")

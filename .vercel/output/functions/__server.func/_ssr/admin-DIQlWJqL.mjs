@@ -3,10 +3,10 @@ import { n as require_react } from "../_libs/@radix-ui/react-compose-refs+[...].
 import { a as useMenuStore, c as verifyAdminPassword, i as useAuthStore, r as updateAdminCredentials, s as useUsersStore, t as ADMIN_ROW_ID } from "./menuStore-CFwYtg9E.mjs";
 import { n as require_jsx_runtime } from "../_libs/radix-ui__react-context+react.mjs";
 import { A as CreditCard, B as CassetteTape, C as LoaderCircle, D as Folder, E as Grid3x3, F as CircleCheck, H as Calendar, I as CircleAlert, K as ArrowLeft, L as ChefHat, M as CloudUpload, O as Eye, P as CircleUser, S as Lock, T as Image, U as Box, V as Camera, W as Banknote, a as UserPlus, c as Tag, d as ShieldCheck, h as Pen, i as User, j as Coffee, k as EyeOff, m as Plus, n as Utensils, o as TrendingUp, p as Receipt, q as Armchair, r as Users, s as Trash2, t as X, u as ShoppingBag, w as Layers, y as Menu, z as ChartColumn } from "../_libs/lucide-react.mjs";
-import { i as useTableStore, o as supabase } from "./router-1yb7JpPf.mjs";
+import { i as useTableStore, o as supabase } from "./router-DrkdTGnv.mjs";
 import { t as fr, u as format } from "../_libs/date-fns.mjs";
 import { t as DayPicker } from "../_libs/react-day-picker.mjs";
-//#region node_modules/.nitro/vite/services/ssr/assets/admin-CD0r8Tat.js
+//#region node_modules/.nitro/vite/services/ssr/assets/admin-DIQlWJqL.js
 var import_react = /* @__PURE__ */ __toESM(require_react());
 var import_jsx_runtime = require_jsx_runtime();
 async function uploadImageToCloudinary(file) {

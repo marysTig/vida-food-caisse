@@ -5,10 +5,10 @@ import { g as Link, l as useRouterState } from "../_libs/@tanstack/react-router+
 import { n as require_jsx_runtime } from "../_libs/radix-ui__react-context+react.mjs";
 import { a as DialogOverlay$1, c as require_react_dom, i as DialogDescription$1, n as DialogClose, o as DialogPortal$1, r as DialogContent$1, s as DialogTitle$1, t as Dialog$1 } from "../_libs/@radix-ui/react-dialog+[...].mjs";
 import { A as CreditCard, F as CircleCheck, L as ChefHat, _ as Minus, f as Search, g as NotebookPen, l as ShoppingCart, m as Plus, p as Receipt, q as Armchair, s as Trash2, t as X, u as ShoppingBag, x as LogOut, z as ChartColumn } from "../_libs/lucide-react.mjs";
-import { i as useTableStore, n as ComponentLoader, r as useTableOrdersStore } from "./router-1yb7JpPf.mjs";
+import { i as useTableStore, n as ComponentLoader, r as useTableOrdersStore } from "./router-DrkdTGnv.mjs";
 import { t as clsx } from "../_libs/clsx.mjs";
 import { t as twMerge } from "../_libs/tailwind-merge.mjs";
-//#region node_modules/.nitro/vite/services/ssr/assets/tables-BerwWIFt.js
+//#region node_modules/.nitro/vite/services/ssr/assets/tables-D4WSPZf3.js
 var import_react = /* @__PURE__ */ __toESM(require_react());
 var import_jsx_runtime = require_jsx_runtime();
 var import_react_dom = /* @__PURE__ */ __toESM(require_react_dom());

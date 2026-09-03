@@ -113,6 +113,8 @@ async function reloadTableStore(isInitialLoad = false) {
 let _initialized = false;
 
 async function _initTableSync() {
+  // Ne s'exécute que dans le navigateur (jamais en SSR/Node)
+  if (typeof window === "undefined") return;
   if (_initialized) return;
 
   try {
