@@ -27,11 +27,13 @@ export const ADMIN_ROW_ID = '00000000-0000-0000-0000-000000000001';
 
 // Wipe any stale admin credential cache left by previous versions of this code.
 // This ensures old passwords can no longer be used from localStorage on any device.
+// Guard with typeof window to avoid crashing in SSR (Vercel/Node) environments.
 (function clearStalAdminCache() {
+  if (typeof window === 'undefined') return;
   try {
     localStorage.removeItem('admin-auth-storage');
   } catch {
-    // Ignore (e.g. SSR context)
+    // Ignore
   }
 })();
 
@@ -156,11 +158,18 @@ export const useSessionStore = create<SessionState>()(
       name: 'pos-session-storage',
       storage: {
         getItem: (name) => {
+          if (typeof window === 'undefined') return null;
           const val = sessionStorage.getItem(name);
           return val ? JSON.parse(val) : null;
         },
-        setItem: (name, value) => sessionStorage.setItem(name, JSON.stringify(value)),
-        removeItem: (name) => sessionStorage.removeItem(name),
+        setItem: (name, value) => {
+          if (typeof window === 'undefined') return;
+          sessionStorage.setItem(name, JSON.stringify(value));
+        },
+        removeItem: (name) => {
+          if (typeof window === 'undefined') return;
+          sessionStorage.removeItem(name);
+        },
       },
     }
   )
