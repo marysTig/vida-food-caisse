@@ -1,5 +1,9 @@
 {
   "framework": null,
-  "buildCommand": "npm run build:vercel",
-  "outputDirectory": ".vercel/output"
+  "buildCommand": "npm run build",
+  "build": {
+    "env": {
+      "NITRO_PRESET": "vercel"
+    }
+  }
 }
