@@ -1,4 +1,5 @@
-import { useState, useEffect, useCallback } from "react";
+import { useEffect, useCallback } from "react";
+import { create } from "zustand";
 import { supabase } from "@/lib/supabase";
 import { type Product } from "@/data/menu";
 
@@ -60,12 +61,79 @@ async function fetchProductsFromDB(): Promise<Product[]> {
   });
 }
 
+// ── Global State (Zustand) ────────────────────────────────────────
+// Singleton : partagé entre tous les composants, une seule souscription Supabase
+
+type MenuGlobalState = {
+  products: Product[];
+  categories: CategoryItem[];
+  loading: boolean;
+  setProducts: (products: Product[]) => void;
+  setCategories: (categories: CategoryItem[]) => void;
+  setLoading: (loading: boolean) => void;
+};
+
+const useMenuGlobalState = create<MenuGlobalState>((set) => ({
+  products: [],
+  categories: [],
+  loading: true,
+  setProducts: (products) => set({ products }),
+  setCategories: (categories) => set({ categories }),
+  setLoading: (loading) => set({ loading }),
+}));
+
+// ── Singleton realtime initializer ───────────────────────────────
+// Garantit qu'une seule souscription Supabase est créée (quelle que soit
+// le nombre de composants appelant useMenuStore)
+
+let _menuInitialized = false;
+
+async function _initMenuStore(
+  setCategories: (c: CategoryItem[]) => void,
+  setProducts: (p: Product[]) => void,
+  setLoading: (l: boolean) => void,
+) {
+  if (_menuInitialized) return;
+  _menuInitialized = true;
+
+  setLoading(true);
+  const [cats, prods] = await Promise.all([
+    fetchCategoriesFromDB(),
+    fetchProductsFromDB(),
+  ]);
+  setCategories(cats);
+  setProducts(prods);
+  setLoading(false);
+
+  const reload = async () => {
+    setLoading(true);
+    const [c, p] = await Promise.all([fetchCategoriesFromDB(), fetchProductsFromDB()]);
+    setCategories(c);
+    setProducts(p);
+    setLoading(false);
+  };
+
+  supabase
+    .channel("menu-categories-global")
+    .on("postgres_changes", { event: "*", schema: "public", table: "categories" }, reload)
+    .subscribe();
+
+  supabase
+    .channel("menu-products-global")
+    .on("postgres_changes", { event: "*", schema: "public", table: "products" }, reload)
+    .subscribe();
+}
+
 // ── Hook principal ────────────────────────────────────────────────
+// API publique identique à l'ancienne version — aucun impact sur les composants
 
 export function useMenuStore() {
-  const [products, setProductsState] = useState<Product[]>([]);
-  const [categories, setCategoriesState] = useState<CategoryItem[]>([]);
-  const [loading, setLoading] = useState(true);
+  const { products, categories, loading, setProducts, setCategories, setLoading } = useMenuGlobalState();
+
+  // Initialise le store et les souscriptions Realtime une seule fois
+  useEffect(() => {
+    _initMenuStore(setCategories, setProducts, setLoading);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const reload = useCallback(async () => {
     setLoading(true);
@@ -73,30 +141,10 @@ export function useMenuStore() {
       fetchCategoriesFromDB(),
       fetchProductsFromDB(),
     ]);
-    setCategoriesState(cats);
-    setProductsState(prods);
+    setCategories(cats);
+    setProducts(prods);
     setLoading(false);
-  }, []);
-
-  useEffect(() => {
-    reload();
-
-    // Temps réel
-    const catChannel = supabase
-      .channel("categories-changes")
-      .on("postgres_changes", { event: "*", schema: "public", table: "categories" }, reload)
-      .subscribe();
-
-    const prodChannel = supabase
-      .channel("products-changes")
-      .on("postgres_changes", { event: "*", schema: "public", table: "products" }, reload)
-      .subscribe();
-
-    return () => {
-      supabase.removeChannel(catChannel);
-      supabase.removeChannel(prodChannel);
-    };
-  }, [reload]);
+  }, [setCategories, setProducts, setLoading]);
 
   // ── CRUD Catégories ─────────────────────────────────────────────
 

@@ -1,4 +1,5 @@
-import { Bell, Search, User } from "lucide-react";
+import { Bell, Search, User, LogOut } from "lucide-react";
+import { useSessionStore } from "@/lib/authStore";
 
 type TopBarProps = {
   query: string;
@@ -6,6 +7,9 @@ type TopBarProps = {
 };
 
 export function TopBar({ query, onQueryChange }: TopBarProps) {
+  const currentUser = useSessionStore(s => s.currentUser);
+  const logoutUser = useSessionStore(s => s.logoutUser);
+
   return (
     <header className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-4 border-b border-border bg-card px-5 py-3 lg:flex lg:justify-between">
       <div className="min-w-0">
@@ -31,10 +35,18 @@ export function TopBar({ query, onQueryChange }: TopBarProps) {
         >
           <Bell className="h-4 w-4" />
         </button>
-        <div className="flex h-10 items-center gap-2 rounded-lg border border-border bg-background px-3">
-          <User className="h-4 w-4 text-muted-foreground" />
-          <span className="hidden text-sm font-semibold text-foreground sm:block">Caissier</span>
-        </div>
+        <button
+          type="button"
+          onClick={logoutUser}
+          className="flex h-10 items-center gap-2 rounded-lg border border-border bg-background px-3 transition-colors hover:bg-destructive/10 hover:text-destructive hover:border-destructive/30"
+          title="Déconnexion"
+        >
+          <User className="h-4 w-4 shrink-0 text-muted-foreground group-hover:text-destructive" />
+          <span className="hidden text-sm font-semibold sm:block">
+            {currentUser?.username || "Caissier"}
+          </span>
+          <LogOut className="h-4 w-4 ml-1 opacity-60" />
+        </button>
       </div>
     </header>
   );

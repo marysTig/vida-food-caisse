@@ -32,8 +32,8 @@ export type Product = {
   price: number;               // prix de base (affiché si aucune option)
   image: string;
   available: boolean;
-  options?: ProductOption[];   // options de taille/variante (optionnel)
-  ingredients?: string;        // liste d'ingrédients (optionnel)
+  options?: ProductOption[] | undefined;   // options de taille/variante (optionnel)
+  ingredients?: string | undefined;        // liste d'ingrédients (optionnel)
 };
 
 
@@ -46,9 +46,44 @@ export const supplements: Supplement[] = [
 ];
 
 export const products: Product[] = [
-  { id: "p1", name: "Pizza Margherita", category: "Pizzas", price: 650, image: pizzaMargherita, available: true },
-  { id: "p2", name: "Pizza 4 Fromages", category: "Pizzas", price: 900, image: pizza4Fromages, available: true },
-  { id: "p3", name: "Pizza Viande", category: "Pizzas", price: 950, image: pizzaViande, available: true },
+  { 
+    id: "p1", 
+    name: "Pizza Margherita", 
+    category: "Pizzas", 
+    price: 650, 
+    image: pizzaMargherita, 
+    available: true,
+    options: [
+      { label: "Moyenne", price: 650 },
+      { label: "Grande", price: 900 },
+      { label: "Méga", price: 1200 },
+    ]
+  },
+  { 
+    id: "p2", 
+    name: "Pizza 4 Fromages", 
+    category: "Pizzas", 
+    price: 900, 
+    image: pizza4Fromages, 
+    available: true,
+    options: [
+      { label: "Moyenne", price: 900 },
+      { label: "Grande", price: 1200 },
+      { label: "Méga", price: 1500 },
+    ]
+  },
+  { 
+    id: "p3", 
+    name: "Pizza Viande", 
+    category: "Pizzas", 
+    price: 950, 
+    image: pizzaViande, 
+    available: true,
+    options: [
+      { label: "Moyenne", price: 950 },
+      { label: "Grande", price: 1300 },
+    ]
+  },
   { id: "p4", name: "Burger Classic", category: "Burgers", price: 750, image: burgerClassic, available: true },
   { id: "p5", name: "Chicken Burger", category: "Burgers", price: 800, image: burgerChicken, available: true },
   { id: "p6", name: "Double Burger", category: "Burgers", price: 950, image: burgerDouble, available: false },

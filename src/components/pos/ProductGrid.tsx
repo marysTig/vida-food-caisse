@@ -3,10 +3,11 @@ import { ProductCard } from "./ProductCard";
 
 type ProductGridProps = {
   products: Product[];
-  onSelect: (product: Product) => void;
+  onSelect?: ((product: Product) => void) | undefined;
+  readOnly?: boolean;
 };
 
-export function ProductGrid({ products, onSelect }: ProductGridProps) {
+export function ProductGrid({ products, onSelect, readOnly = false }: ProductGridProps) {
   if (products.length === 0) {
     return (
       <div className="rounded-xl border border-dashed border-border bg-card p-10 text-center">
@@ -21,7 +22,7 @@ export function ProductGrid({ products, onSelect }: ProductGridProps) {
   return (
     <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-4">
       {products.map((product) => (
-        <ProductCard key={product.id} product={product} onSelect={onSelect} />
+        <ProductCard key={product.id} product={product} onSelect={onSelect} readOnly={readOnly} />
       ))}
     </div>
   );

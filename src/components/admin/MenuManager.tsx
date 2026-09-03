@@ -356,7 +356,7 @@ export function MenuManager() {
               <Loader2 className="h-4 w-4 animate-spin" /> Chargement…
             </div>
           ) : (
-            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+            <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-4">
               {products.filter(p => p.category === effectiveCategory).map(prod => (
                 <div key={prod.id} className="group flex flex-col gap-3 rounded-xl border border-border p-3 bg-card">
                   <div className="relative aspect-video w-full overflow-hidden rounded-lg bg-muted">

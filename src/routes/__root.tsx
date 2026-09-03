@@ -1,17 +1,17 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
   Outlet,
-  Link,
   createRootRouteWithContext,
   useRouter,
-  useRouterState,
   HeadContent,
   Scripts,
+  Link,
 } from "@tanstack/react-router";
 import { useEffect, type ReactNode } from "react";
 
 import appCss from "../styles.css?url";
 import { reportLovableError } from "../lib/lovable-error-reporting";
+import { PageLoader } from "../components/ui/PageLoader";
 
 function NotFoundComponent() {
   return (
@@ -105,6 +105,7 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
   component: RootComponent,
   notFoundComponent: NotFoundComponent,
   errorComponent: ErrorComponent,
+  pendingComponent: PageLoader,
 });
 
 function RootShell({ children }: { children: ReactNode }) {
@@ -124,45 +125,14 @@ function RootShell({ children }: { children: ReactNode }) {
 function RootComponent() {
   const { queryClient } = Route.useRouteContext();
 
+
+
   return (
     <QueryClientProvider client={queryClient}>
       {/* Required: nested routes render here. Removing <Outlet /> breaks all child routes. */}
       <Outlet />
-      <RoleSwitcher />
     </QueryClientProvider>
   );
 }
 
-function RoleSwitcher() {
-  const location = useRouterState({ select: s => s.location.pathname });
 
-  const roles = [
-    { path: "/", label: "Caisse" },
-    { path: "/serveur", label: "Serveur" },
-    { path: "/admin", label: "Admin" },
-  ];
-
-  let currentIndex = roles.findIndex((r) => r.path === location);
-  if (currentIndex === -1) currentIndex = 0; // Show by default on any page
-
-  const prevIndex = (currentIndex - 1 + roles.length) % roles.length;
-  const nextIndex = (currentIndex + 1) % roles.length;
-
-  return (
-    <div className="fixed top-4 left-1/2 -translate-x-1/2 z-[99999] flex items-center gap-2 rounded-full bg-sidebar p-2 shadow-[0_10px_40px_rgba(0,0,0,0.3)] border border-border">
-      <Link
-        to={roles[prevIndex].path}
-        className="rounded-full bg-secondary px-4 py-2 text-xs font-medium text-secondary-foreground hover:bg-secondary/80 transition-colors"
-      >
-        Précédent ({roles[prevIndex].label})
-      </Link>
-      <div className="px-4 text-sm font-bold text-foreground">{roles[currentIndex].label}</div>
-      <Link
-        to={roles[nextIndex].path}
-        className="rounded-full bg-primary px-4 py-2 text-xs font-medium text-primary-foreground hover:bg-primary/90 transition-colors"
-      >
-        Suivant ({roles[nextIndex].label})
-      </Link>
-    </div>
-  );
-}

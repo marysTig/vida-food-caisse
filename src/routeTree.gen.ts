@@ -11,6 +11,7 @@
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as AdminRouteImport } from './routes/admin'
+import { Route as EmporterRouteImport } from './routes/emporter'
 import { Route as ServeurRouteImport } from './routes/serveur'
 import { Route as TablesRouteImport } from './routes/tables'
 
@@ -22,6 +23,11 @@ const IndexRoute = IndexRouteImport.update({
 const AdminRoute = AdminRouteImport.update({
   id: '/admin',
   path: '/admin',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const EmporterRoute = EmporterRouteImport.update({
+  id: '/emporter',
+  path: '/emporter',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ServeurRoute = ServeurRouteImport.update({
@@ -38,12 +44,14 @@ const TablesRoute = TablesRouteImport.update({
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/admin': typeof AdminRoute
+  '/emporter': typeof EmporterRoute
   '/serveur': typeof ServeurRoute
   '/tables': typeof TablesRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/admin': typeof AdminRoute
+  '/emporter': typeof EmporterRoute
   '/serveur': typeof ServeurRoute
   '/tables': typeof TablesRoute
 }
@@ -51,20 +59,22 @@ export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/admin': typeof AdminRoute
+  '/emporter': typeof EmporterRoute
   '/serveur': typeof ServeurRoute
   '/tables': typeof TablesRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/admin' | '/serveur' | '/tables'
+  fullPaths: '/' | '/admin' | '/emporter' | '/serveur' | '/tables'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/admin' | '/serveur' | '/tables'
-  id: '__root__' | '/' | '/admin' | '/serveur' | '/tables'
+  to: '/' | '/admin' | '/emporter' | '/serveur' | '/tables'
+  id: '__root__' | '/' | '/admin' | '/emporter' | '/serveur' | '/tables'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   AdminRoute: typeof AdminRoute
+  EmporterRoute: typeof EmporterRoute
   ServeurRoute: typeof ServeurRoute
   TablesRoute: typeof TablesRoute
 }
@@ -83,6 +93,13 @@ declare module '@tanstack/react-router' {
       path: '/admin'
       fullPath: '/admin'
       preLoaderRoute: typeof AdminRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/emporter': {
+      id: '/emporter'
+      path: '/emporter'
+      fullPath: '/emporter'
+      preLoaderRoute: typeof EmporterRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/serveur': {
@@ -105,6 +122,7 @@ declare module '@tanstack/react-router' {
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   AdminRoute: AdminRoute,
+  EmporterRoute: EmporterRoute,
   ServeurRoute: ServeurRoute,
   TablesRoute: TablesRoute,
 }

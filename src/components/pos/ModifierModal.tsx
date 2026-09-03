@@ -17,17 +17,20 @@ type ModifierModalProps = {
     id: string,
     supplements: { id: string; label: string; price: number }[],
     note: string,
+    customPrice?: number
   ) => void;
 };
 
 export function ModifierModal({ item, open, onOpenChange, onConfirm }: ModifierModalProps) {
   const [selected, setSelected] = useState<string[]>([]);
   const [note, setNote] = useState("");
+  const [customPrice, setCustomPrice] = useState<string>("");
 
   useEffect(() => {
     if (item) {
       setSelected(item.supplements.map((s) => s.id));
       setNote(item.note ?? "");
+      setCustomPrice(item.customPrice !== undefined ? item.customPrice.toString() : "");
     }
   }, [item]);
 
@@ -76,6 +79,18 @@ export function ModifierModal({ item, open, onOpenChange, onConfirm }: ModifierM
               className="h-11 w-full rounded-lg border border-border bg-background px-3 text-sm text-foreground outline-none placeholder:text-muted-foreground focus:border-primary"
             />
           </div>
+
+          <div>
+            <p className="mb-2 text-sm font-semibold text-foreground">Modifier le prix (Optionnel)</p>
+            <input
+              type="number"
+              min="0"
+              value={customPrice}
+              onChange={(e) => setCustomPrice(e.target.value)}
+              placeholder={`Prix de base : ${formatDA(item?.selectedOption ? item.selectedOption.price : item?.product.price || 0)}`}
+              className="h-11 w-full rounded-lg border border-border bg-background px-3 text-sm text-foreground outline-none placeholder:text-muted-foreground focus:border-primary"
+            />
+          </div>
         </div>
 
         <DialogFooter>
@@ -88,17 +103,20 @@ export function ModifierModal({ item, open, onOpenChange, onConfirm }: ModifierM
           </button>
           <button
             type="button"
-            onClick={() =>
-              item &&
-              onConfirm(
-                item.id,
-                supplements.filter((s) => selected.includes(s.id)),
-                note,
-              )
-            }
+            onClick={() => {
+              if (item) {
+                const parsedPrice = customPrice.trim() !== "" ? parseFloat(customPrice) : undefined;
+                onConfirm(
+                  item.id,
+                  supplements.filter((s) => selected.includes(s.id)),
+                  note,
+                  parsedPrice && !isNaN(parsedPrice) ? parsedPrice : undefined
+                );
+              }
+            }}
             className="h-11 rounded-lg bg-primary px-6 text-sm font-bold text-primary-foreground transition-colors hover:bg-primary/90"
           >
-            Ajouter
+            Mettre à jour
           </button>
         </DialogFooter>
       </DialogContent>

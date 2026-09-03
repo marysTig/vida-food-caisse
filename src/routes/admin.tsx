@@ -1,25 +1,38 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useState } from "react";
-import { ChefHat, Utensils, Armchair, BarChart3, Menu, X } from "lucide-react";
+import { ChefHat, Utensils, Armchair, BarChart3, Menu, X, Users, UserCircle } from "lucide-react";
 import { MenuManager } from "@/components/admin/MenuManager";
 import { TableManager } from "@/components/admin/TableManager";
 import { ZReport } from "@/components/admin/ZReport";
+import { AdminLogin } from "@/components/auth/AdminLogin";
+import { useAuthStore } from "@/lib/authStore";
+import { UserManager } from "@/components/admin/UserManager";
+import { AdminProfile } from "@/components/admin/AdminProfile";
 
 export const Route = createFileRoute("/admin")({
   component: AdminPage,
 });
 
-type Tab = "menu" | "tables" | "rapport";
+type Tab = "menu" | "tables" | "rapport" | "utilisateurs" | "profil";
 
 const navItems = [
-  { id: "menu"    as const, icon: Utensils,  label: "Gestion du Menu" },
-  { id: "tables"  as const, icon: Armchair,  label: "Gestion des Tables" },
-  { id: "rapport" as const, icon: BarChart3, label: "Rapport Z" },
+  { id: "menu"         as const, icon: Utensils,    label: "Gestion du Menu" },
+  { id: "tables"       as const, icon: Armchair,    label: "Gestion des Tables" },
+  { id: "rapport"      as const, icon: BarChart3,   label: "Rapport Z" },
+  { id: "utilisateurs" as const, icon: Users,       label: "Utilisateurs" },
+  { id: "profil"       as const, icon: UserCircle,  label: "Mon Profil" },
 ];
 
 function AdminPage() {
   const [activeTab, setActiveTab] = useState<Tab>("menu");
   const [isOpen, setIsOpen] = useState(true);
+  const isAuthenticated = useAuthStore((s) => s.isAdminAuthenticated);
+  const logout = useAuthStore((s) => s.logout);
+
+  // Show login gate if not authenticated
+  if (!isAuthenticated) {
+    return <AdminLogin onSuccess={() => {}} />;
+  }
 
   return (
     <div className="flex h-screen w-full overflow-hidden bg-background font-sans">
@@ -55,13 +68,20 @@ function AdminPage() {
         </nav>
 
         {/* Close button at the bottom */}
-        <div className="border-t border-sidebar-border p-3">
+        <div className="border-t border-sidebar-border p-3 flex flex-col gap-2">
           <button
             onClick={() => setIsOpen(false)}
             className="flex w-full items-center gap-3 rounded-lg px-3 py-3 text-sm font-medium text-sidebar-foreground/60 transition-colors hover:bg-sidebar-accent hover:text-sidebar-foreground"
           >
             <X className="h-5 w-5 shrink-0" />
             <span>Fermer le panneau</span>
+          </button>
+          <button
+            onClick={logout}
+            className="flex w-full items-center gap-3 rounded-lg px-3 py-3 text-sm font-medium text-destructive/80 transition-colors hover:bg-destructive/20 hover:text-destructive"
+          >
+            <X className="h-5 w-5 shrink-0 opacity-0" />
+            <span className="-ml-8">Déconnexion</span>
           </button>
         </div>
       </aside>
@@ -82,17 +102,21 @@ function AdminPage() {
             </button>
           )}
           <h1 className="text-lg font-semibold">
-            {activeTab === "menu"    && "Gestion du Menu"}
-            {activeTab === "tables"  && "Gestion des Tables"}
-            {activeTab === "rapport" && "Rapport Z"}
+            {activeTab === "menu"         && "Gestion du Menu"}
+            {activeTab === "tables"       && "Gestion des Tables"}
+            {activeTab === "rapport"      && "Rapport Z"}
+            {activeTab === "utilisateurs" && "Gestion des Utilisateurs"}
+            {activeTab === "profil"       && "Mon Profil"}
           </h1>
         </header>
 
         {/* Content */}
         <div className="flex-1 overflow-hidden">
-          {activeTab === "menu"    && <MenuManager />}
-          {activeTab === "tables"  && <TableManager />}
-          {activeTab === "rapport" && <ZReport />}
+          {activeTab === "menu"         && <MenuManager />}
+          {activeTab === "tables"       && <TableManager />}
+          {activeTab === "rapport"      && <ZReport />}
+          {activeTab === "utilisateurs" && <UserManager />}
+          {activeTab === "profil"       && <AdminProfile />}
         </div>
       </main>
     </div>

@@ -1,19 +1,16 @@
 import type { Product } from "@/data/menu";
 import { formatDA } from "@/data/menu";
+import { Plus } from "lucide-react";
 
 type ProductCardProps = {
   product: Product;
-  onSelect: (product: Product) => void;
+  onSelect?: ((product: Product) => void) | undefined;
+  readOnly?: boolean;
 };
 
-export function ProductCard({ product, onSelect }: ProductCardProps) {
-  return (
-    <button
-      type="button"
-      disabled={!product.available}
-      onClick={() => onSelect(product)}
-      className="group flex flex-col overflow-hidden rounded-xl border border-border bg-card text-left transition-colors hover:border-primary disabled:cursor-not-allowed disabled:opacity-55 disabled:hover:border-border"
-    >
+export function ProductCard({ product, onSelect, readOnly = false }: ProductCardProps) {
+  const inner = (
+    <>
       <div className="relative aspect-[4/3] overflow-hidden bg-muted">
         {product.image ? (
           <img
@@ -48,17 +45,63 @@ export function ProductCard({ product, onSelect }: ProductCardProps) {
           <div className="flex flex-wrap gap-1 mt-0.5">
             {product.options.map((opt) => (
               <span key={opt.label} className="rounded-md bg-secondary/60 px-1.5 py-0.5 text-[10px] font-medium text-secondary-foreground">
-                {opt.label}
+                {opt.label} â€” {formatDA(opt.price)}
               </span>
             ))}
           </div>
         )}
-        <p className="mt-auto pt-1 text-base font-bold text-primary">
-          {product.options && product.options.length > 0 
-            ? `Dès ${formatDA(Math.min(...product.options.map(o => o.price)))}`
-            : formatDA(product.price)}
-        </p>
+        <div className="mt-auto flex items-center justify-between pt-1">
+          <p className="text-base font-bold text-primary">
+            {product.options && product.options.length > 0
+              ? `DÃ¨s ${formatDA(Math.min(...product.options.map(o => o.price)))}`
+              : formatDA(product.price)}
+          </p>
+          {/* Bouton + toujours visible sur mobile, visible au hover sur desktop */}
+          {!readOnly && product.available && (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                onSelect?.(product);
+              }}
+              className="flex h-8 w-8 items-center justify-center rounded-full bg-primary text-primary-foreground shadow-md transition-all active:scale-90 md:opacity-0 md:group-hover:opacity-100 md:scale-90 md:group-hover:scale-100"
+            >
+              <Plus className="h-4 w-4" strokeWidth={2.5} />
+            </button>
+          )}
+        </div>
       </div>
-    </button>
+    </>
+  );
+
+  if (readOnly) {
+    return (
+      <div className="flex flex-col overflow-hidden rounded-xl border border-border bg-card text-left opacity-[0.97]">
+        {inner}
+      </div>
+    );
+  }
+
+  return (
+    <div
+      role="button"
+      tabIndex={product.available ? 0 : undefined}
+      onClick={() => {
+        if (product.available) onSelect?.(product);
+      }}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          if (product.available) onSelect?.(product);
+        }
+      }}
+      className={`group flex flex-col overflow-hidden rounded-xl border border-border bg-card text-left transition-all ${
+        product.available 
+          ? "cursor-pointer hover:border-primary hover:shadow-md" 
+          : "cursor-not-allowed opacity-55 hover:border-border"
+      }`}
+    >
+      {inner}
+    </div>
   );
 }
