@@ -114,14 +114,16 @@ let _initialized = false;
 
 async function _initTableSync() {
   if (_initialized) return;
-  _initialized = true;
 
   try {
     await reloadTableStore(true);
   } catch (error) {
-    _initialized = false;
+    // _initialized reste false → réessai possible au prochain mount
     return;
   }
+
+  // Marquer comme initialisé seulement après un chargement réussi
+  _initialized = true;
 
   supabase
     .channel("tables-rooms-realtime")
@@ -163,7 +165,13 @@ async function _initTableSync() {
         });
       }
     })
-    .subscribe();
+    .subscribe((status, err) => {
+      if (status === "CHANNEL_ERROR" || status === "CLOSED") {
+        console.error("[tables-rooms] Realtime channel error:", status, err);
+        // Réinitialiser pour permettre une nouvelle tentative
+        _initialized = false;
+      }
+    });
 }
 
 export function useTableSync() {

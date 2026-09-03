@@ -10,9 +10,8 @@ import { CheckoutReceiptModal } from "@/components/pos/CheckoutReceiptModal";
 import { formatElapsed, type TableStatus } from "@/data/tables";
 import { formatDA } from "@/data/menu";
 import { useTableStore, type TableItem } from "@/lib/tableStore";
-import { useTableOrdersStore, useTableOrdersSync } from "@/lib/tableOrdersStore";
+import { useTableOrdersStore } from "@/lib/tableOrdersStore";
 import { useSessionStore } from "@/lib/authStore";
-import { useTableSync } from "@/lib/tableStore";
 import { UserLogin } from "@/components/auth/UserLogin";
 import { ComponentLoader } from "@/components/ui/PageLoader";
 
@@ -237,10 +236,6 @@ function MergedTableLines({ tables }: { tables: TableItem[] }) {
 
 // ── TablesPage ───────────────────────────────────────────────────────────────
 function TablesPage() {
-  // Initialise le chargement et l'écoute Realtime (une seule fois)
-  useTableSync();
-  useTableOrdersSync();
-
   const { tables: tableData, loading: tablesLoading, updateTable, rooms, addRoom, addTable, mergeTablesDB } = useTableStore();
   const { orders, orderNotes, clearOrder, mergeOrders } = useTableOrdersStore();
   const currentUser = useSessionStore((s) => s.currentUser);

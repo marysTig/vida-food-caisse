@@ -8,6 +8,8 @@ import {
   Link,
 } from "@tanstack/react-router";
 import { useEffect, type ReactNode } from "react";
+import { useTableSync } from "../lib/tableStore";
+import { useTableOrdersSync } from "../lib/tableOrdersStore";
 
 import appCss from "../styles.css?url";
 import { reportLovableError } from "../lib/lovable-error-reporting";
@@ -125,7 +127,10 @@ function RootShell({ children }: { children: ReactNode }) {
 function RootComponent() {
   const { queryClient } = Route.useRouteContext();
 
-
+  // Initialise le chargement et l'écoute Realtime une seule fois,
+  // quelle que soit la page affichée (tables, emporter, admin…)
+  useTableSync();
+  useTableOrdersSync();
 
   return (
     <QueryClientProvider client={queryClient}>
@@ -134,5 +139,4 @@ function RootComponent() {
     </QueryClientProvider>
   );
 }
-
 

@@ -133,7 +133,6 @@ let _initialized = false;
 
 async function _initTableOrdersSync() {
   if (_initialized) return;
-  _initialized = true;
 
   try {
     // 1. Charger les commandes existantes depuis Supabase
@@ -143,24 +142,25 @@ async function _initTableOrdersSync() {
 
     if (error) {
       console.error("[table_orders] initial load error:", error.message);
-      _initialized = false;
-      return;
-    } else {
-      const orders: Record<string, CartItem[]> = {};
-      const notes: Record<string, string> = {};
-      for (const row of data ?? []) {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        orders[(row as any).table_id] = (row as any).items as CartItem[];
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        notes[(row as any).table_id] = (row as any).note ?? "";
-      }
-      useTableOrdersStore.getState()._setAll(orders, notes);
+      return; // _initialized reste false → réessai possible au prochain mount
     }
+
+    const orders: Record<string, CartItem[]> = {};
+    const notes: Record<string, string> = {};
+    for (const row of data ?? []) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      orders[(row as any).table_id] = (row as any).items as CartItem[];
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      notes[(row as any).table_id] = (row as any).note ?? "";
+    }
+    useTableOrdersStore.getState()._setAll(orders, notes);
   } catch (err) {
     console.error("[table_orders] try/catch error:", err);
-    _initialized = false;
-    return;
+    return; // _initialized reste false → réessai possible
   }
+
+  // Marquer comme initialisé seulement après un chargement réussi
+  _initialized = true;
 
   // 2. S'abonner aux changements en temps réel
   supabase
@@ -182,7 +182,13 @@ async function _initTableOrdersSync() {
         }
       },
     )
-    .subscribe();
+    .subscribe((status, err) => {
+      if (status === "CHANNEL_ERROR" || status === "CLOSED") {
+        console.error("[table_orders] Realtime channel error:", status, err);
+        // Réinitialiser pour permettre une nouvelle tentative
+        _initialized = false;
+      }
+    });
 }
 
 /**
