@@ -5,8 +5,7 @@ const config: CapacitorConfig = {
   appName: 'vida-food-caisse',
   webDir: '.output/public',
   server: {
-    url: 'http://192.168.100.6:8080',
-    cleartext: true
+    url: 'https://vida-food-caisse.vercel.app/'
   }
 };
 
