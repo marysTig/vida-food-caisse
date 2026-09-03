@@ -132,8 +132,6 @@ export const useTableOrdersStore = create<TableOrdersState>((set, get) => ({
 let _initialized = false;
 
 async function _initTableOrdersSync() {
-  // Ne s'exécute que dans le navigateur (jamais en SSR/Node)
-  if (typeof window === "undefined") return;
   if (_initialized) return;
 
   try {
