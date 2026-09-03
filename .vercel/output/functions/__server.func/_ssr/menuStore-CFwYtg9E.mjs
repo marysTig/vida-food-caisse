@@ -1,7 +1,7 @@
 import { i as __toESM, n as __exportAll } from "../_runtime.mjs";
 import { n as require_react } from "../_libs/@radix-ui/react-compose-refs+[...].mjs";
 import { n as create, t as persist } from "../_libs/zustand.mjs";
-import { a as __exportAll$1, o as supabase } from "./router-DrkdTGnv.mjs";
+import { a as __exportAll$1, o as supabase } from "./router-1yb7JpPf.mjs";
 //#region node_modules/.nitro/vite/services/ssr/assets/menuStore-CFwYtg9E.js
 var menuStore_CFwYtg9E_exports = /* @__PURE__ */ __exportAll({
 	a: () => useAuthStore,

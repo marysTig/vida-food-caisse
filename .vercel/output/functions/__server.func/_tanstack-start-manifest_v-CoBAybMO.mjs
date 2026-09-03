@@ -1,4 +1,4 @@
-//#region node_modules/.nitro/vite/services/ssr/assets/_tanstack-start-manifest_v-D525PxTn.js
+//#region node_modules/.nitro/vite/services/ssr/assets/_tanstack-start-manifest_v-CoBAybMO.js
 var tsrStartManifest = () => ({ routes: {
 	__root__: {
 		filePath: "C:/Users/marys/Dev project/La vida food/vida-food-caisse/src/routes/__root.tsx",
@@ -9,11 +9,11 @@ var tsrStartManifest = () => ({ routes: {
 			"/serveur",
 			"/tables"
 		],
-		preloads: ["/assets/index-DDBZVyhs.js", "/assets/supabase-B7plKqhs.js"],
+		preloads: ["/assets/index-BdD2wwXI.js", "/assets/supabase-B7plKqhs.js"],
 		scripts: [{ attrs: {
 			type: "module",
 			async: !0,
-			src: "/assets/index-DDBZVyhs.js"
+			src: "/assets/index-BdD2wwXI.js"
 		} }]
 	},
 	"/": {
@@ -26,18 +26,18 @@ var tsrStartManifest = () => ({ routes: {
 		children: void 0,
 		css: ["/assets/admin-BxgC7ZK2.css"],
 		preloads: [
-			"/assets/admin-tWoPfJHO.js",
-			"/assets/menuStore-OsElgFOF.js",
-			"/assets/users-D2BfY4kU.js"
+			"/assets/admin-DBq8O9Yn.js",
+			"/assets/menuStore-D_zOB94N.js",
+			"/assets/users-BdhhtphU.js"
 		]
 	},
 	"/emporter": {
 		filePath: "C:/Users/marys/Dev project/La vida food/vida-food-caisse/src/routes/emporter.tsx",
 		children: void 0,
 		preloads: [
-			"/assets/emporter-Cty2YMiM.js",
-			"/assets/tables-7xbgr0BF.js",
-			"/assets/menuStore-OsElgFOF.js"
+			"/assets/emporter-DD_VAGjd.js",
+			"/assets/tables-FezNcfOc.js",
+			"/assets/menuStore-D_zOB94N.js"
 		]
 	},
 	"/serveur": {
@@ -49,10 +49,10 @@ var tsrStartManifest = () => ({ routes: {
 		filePath: "C:/Users/marys/Dev project/La vida food/vida-food-caisse/src/routes/tables.tsx",
 		children: void 0,
 		preloads: [
-			"/assets/tables-C5BTKTU-.js",
-			"/assets/tables-7xbgr0BF.js",
-			"/assets/menuStore-OsElgFOF.js",
-			"/assets/users-D2BfY4kU.js"
+			"/assets/tables-BKI2Xhpd.js",
+			"/assets/tables-FezNcfOc.js",
+			"/assets/menuStore-D_zOB94N.js",
+			"/assets/users-BdhhtphU.js"
 		]
 	}
 } });
