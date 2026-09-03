@@ -1,5 +1,4 @@
 {
   "framework": null,
-  "buildCommand": "npm run build",
-  "outputDirectory": ".output/public"
+  "buildCommand": "npm run build"
 }
