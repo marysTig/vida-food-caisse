@@ -108,7 +108,7 @@ export async function reloadTableStore(isInitialLoad = false) {
     console.error("Error reloading table store:", error);
     throw error;
   } finally {
-    if (isInitialLoad) store.setLoading(false);
+    store.setLoading(false);
   }
 }
 

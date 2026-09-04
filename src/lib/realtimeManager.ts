@@ -59,6 +59,7 @@ export class RealtimeManager {
   private _destroyed = false;
   private _backoffIndex = 0;
   private _reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private _isFirstSubscription = true;
 
   constructor(options: RealtimeManagerOptions) {
     this._name = options.channelName;
@@ -161,8 +162,14 @@ export class RealtimeManager {
         this._log("SUBSCRIBED ✅");
         this._backoffIndex = 0; // Reset backoff après succès
         this._reconnecting = false;
-        // Resync après reconnexion pour récupérer les événements manqués
-        void this._safeResync();
+        
+        if (this._isFirstSubscription) {
+          this._isFirstSubscription = false;
+          // Les données ont déjà été chargées via init() juste avant la souscription.
+        } else {
+          // Resync après reconnexion pour récupérer les événements manqués
+          void this._safeResync();
+        }
         break;
 
       case "CHANNEL_ERROR":
