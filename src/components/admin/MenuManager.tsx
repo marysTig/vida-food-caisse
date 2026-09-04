@@ -22,7 +22,6 @@ export function MenuManager() {
 
   const [activeCategory, setActiveCategory] = useState<string>("");
   const [newCatName, setNewCatName] = useState("");
-  const [newCatImage, setNewCatImage] = useState("");
   const [isEditingCat, setIsEditingCat] = useState<CategoryItem | null>(null);
   const [isEditing, setIsEditing] = useState<Product | null>(null);
   const [showProductForm, setShowProductForm] = useState(false);
@@ -41,17 +40,15 @@ export function MenuManager() {
       if (isEditingCat && isEditingCat.id) {
         await updateCategory(isEditingCat.id, {
           name: newCatName.trim(),
-          image: newCatImage.trim(),
         });
         if (activeCategory === isEditingCat.name) {
           setActiveCategory(newCatName.trim());
         }
         setIsEditingCat(null);
       } else {
-        await addCategory({ name: newCatName.trim(), image: newCatImage.trim() });
+        await addCategory({ name: newCatName.trim() });
       }
       setNewCatName("");
-      setNewCatImage("");
     } catch (err: any) {
       setError(err.message ?? "Erreur lors de la sauvegarde");
     } finally {
@@ -62,13 +59,11 @@ export function MenuManager() {
   const handleEditCategoryClick = (cat: CategoryItem) => {
     setIsEditingCat(cat);
     setNewCatName(cat.name);
-    setNewCatImage(cat.image || "");
   };
 
   const handleCancelEditCat = () => {
     setIsEditingCat(null);
     setNewCatName("");
-    setNewCatImage("");
   };
 
   const handleDeleteCategory = async (cat: CategoryItem) => {
@@ -200,10 +195,6 @@ export function MenuManager() {
             className="rounded-md border border-border bg-background px-3 py-2 text-sm outline-none focus:border-primary"
             required
           />
-          <div className="flex flex-col gap-1.5 mt-2">
-            <label className="text-sm font-medium">Image (optionnel)</label>
-            <ImageUploader value={newCatImage} onChange={setNewCatImage} />
-          </div>
           <div className="flex gap-2 mt-1">
             {isEditingCat && (
               <button type="button" onClick={handleCancelEditCat} className="flex-1 rounded-md px-4 py-2 text-sm font-medium hover:bg-muted">
