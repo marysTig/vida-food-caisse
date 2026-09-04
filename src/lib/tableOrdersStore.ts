@@ -2,6 +2,7 @@ import { useEffect } from "react";
 import { create } from "zustand";
 import { supabase } from "@/lib/supabase";
 import type { CartItem } from "@/lib/cart";
+import { RealtimeManager, type PostgresPayload } from "@/lib/realtimeManager";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -127,68 +128,69 @@ export const useTableOrdersStore = create<TableOrdersState>((set, get) => ({
   },
 }));
 
-// ── Realtime initializer — singleton, called once from RootComponent ───────────
+// ── Resync depuis Supabase ─────────────────────────────────────────────────────
 
-let _initialized = false;
+async function resyncTableOrders(): Promise<void> {
+  const { data, error } = await supabase
+    .from("table_orders")
+    .select("table_id, items, note");
 
-async function _initTableOrdersSync() {
-  if (_initialized) return;
-
-  try {
-    // 1. Charger les commandes existantes depuis Supabase
-    const { data, error } = await supabase
-      .from("table_orders")
-      .select("table_id, items, note");
-
-    if (error) {
-      console.error("[table_orders] initial load error:", error.message);
-      return; // _initialized reste false → réessai possible au prochain mount
-    }
-
-    const orders: Record<string, CartItem[]> = {};
-    const notes: Record<string, string> = {};
-    for (const row of data ?? []) {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      orders[(row as any).table_id] = (row as any).items as CartItem[];
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      notes[(row as any).table_id] = (row as any).note ?? "";
-    }
-    useTableOrdersStore.getState()._setAll(orders, notes);
-  } catch (err) {
-    console.error("[table_orders] try/catch error:", err);
-    return; // _initialized reste false → réessai possible
+  if (error) {
+    console.error("[table_orders] resync error:", error.message);
+    throw error;
   }
 
-  // Marquer comme initialisé seulement après un chargement réussi
-  _initialized = true;
+  const orders: Record<string, CartItem[]> = {};
+  const notes: Record<string, string> = {};
+  for (const row of data ?? []) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    orders[(row as any).table_id] = (row as any).items as CartItem[];
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    notes[(row as any).table_id] = (row as any).note ?? "";
+  }
+  useTableOrdersStore.getState()._setAll(orders, notes);
+}
 
-  // 2. S'abonner aux changements en temps réel
-  supabase
-    .channel("table-orders-realtime")
-    .on(
-      "postgres_changes",
-      { event: "*", schema: "public", table: "table_orders" },
-      (payload) => {
-        const store = useTableOrdersStore.getState();
-        if (payload.eventType === "DELETE") {
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          store._removeOrder((payload.old as any).table_id);
-        } else {
-          // INSERT or UPDATE
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          const row = payload.new as any;
-          store._patchOrder(row.table_id, row.items as CartItem[]);
-          store._patchNote(row.table_id, row.note ?? "");
-        }
-      },
-    )
-    .subscribe((status, err) => {
-      if (status === "CHANNEL_ERROR" || status === "CLOSED") {
-        console.error("[table_orders] Realtime channel error:", status, err);
-        // Réinitialiser pour permettre une nouvelle tentative
-        _initialized = false;
-      }
+// ── Payload handler (logique métier Realtime inchangée) ───────────────────────
+
+function handleTableOrderPayload(payload: PostgresPayload): void {
+  const store = useTableOrdersStore.getState();
+  if (payload.eventType === "DELETE") {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    store._removeOrder((payload.old as any).table_id);
+  } else {
+    // INSERT or UPDATE
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const row = payload.new as any;
+    store._patchOrder(row.table_id, row.items as CartItem[]);
+    store._patchNote(row.table_id, row.note ?? "");
+  }
+}
+
+// ── Singleton RealtimeManager pour table_orders ────────────────────────────────
+
+let _tableOrdersManager: RealtimeManager | null = null;
+
+function getTableOrdersManager(): RealtimeManager {
+  if (!_tableOrdersManager) {
+    _tableOrdersManager = new RealtimeManager({
+      channelName: "table-orders-realtime",
+      listeners: [
+        {
+          schema: "public",
+          table: "table_orders",
+          onPayload: handleTableOrderPayload,
+        },
+      ],
+      onResync: resyncTableOrders,
     });
+  }
+  return _tableOrdersManager;
+}
+
+/** Exposé pour que __root.tsx puisse déclencher handleForeground() */
+export function getTableOrdersRealtimeManager(): RealtimeManager {
+  return getTableOrdersManager();
 }
 
 /**
@@ -197,6 +199,9 @@ async function _initTableOrdersSync() {
  */
 export function useTableOrdersSync() {
   useEffect(() => {
-    _initTableOrdersSync();
+    const manager = getTableOrdersManager();
+    void manager.init();
+    // Pas de destroy() ici : le manager est un singleton global qui doit
+    // rester actif pendant toute la durée de vie de l'app.
   }, []);
 }

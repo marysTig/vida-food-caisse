@@ -1,7 +1,8 @@
-import { useEffect, useCallback } from "react";
+import { useEffect } from "react";
 import { create } from "zustand";
 import { supabase } from "@/lib/supabase";
 import { type TableStatus } from "@/data/tables";
+import { RealtimeManager, type PostgresPayload } from "@/lib/realtimeManager";
 
 export type RoomItem = {
   id: string;
@@ -34,8 +35,8 @@ const useTableGlobalState = create<TableGlobalState>((set) => ({
   tables: [],
   loading: true,
   setRooms: (rooms) => set({ rooms }),
-  setTables: (tables) => set((state) => ({ 
-    tables: typeof tables === 'function' ? tables(state.tables) : tables 
+  setTables: (tables) => set((state) => ({
+    tables: typeof tables === 'function' ? tables(state.tables) : tables
   })),
   setLoading: (loading) => set({ loading }),
 }));
@@ -71,6 +72,7 @@ async function fetchTablesFromDB(): Promise<TableItem[]> {
     return [];
   }
 
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   return (data ?? []).map((row: any) => {
     const item: TableItem = {
       id: row["id"] as string,
@@ -92,7 +94,7 @@ async function fetchTablesFromDB(): Promise<TableItem[]> {
   });
 }
 
-async function reloadTableStore(isInitialLoad = false) {
+export async function reloadTableStore(isInitialLoad = false) {
   const store = useTableGlobalState.getState();
   if (isInitialLoad) store.setLoading(true);
   try {
@@ -110,80 +112,102 @@ async function reloadTableStore(isInitialLoad = false) {
   }
 }
 
-let _initialized = false;
+// ── Payload handler (logique métier Realtime inchangée) ───────────
 
-async function _initTableSync() {
-  if (_initialized) return;
+function handleTableRoomPayload(payload: PostgresPayload): void {
+  const store = useTableGlobalState.getState();
 
-  try {
-    await reloadTableStore(true);
-  } catch (error) {
-    // _initialized reste false → réessai possible au prochain mount
+  if (payload.table === "rooms") {
+    if (payload.eventType === "DELETE") {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      store.setRooms(store.rooms.filter(r => r.id !== (payload.old as any).id));
+    } else {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const newRoom = { id: (payload.new as any).id, name: (payload.new as any).name };
+      const exists = store.rooms.some(r => r.id === newRoom.id);
+      store.setRooms(
+        exists
+          ? store.rooms.map(r => r.id === newRoom.id ? newRoom : r)
+          : [...store.rooms, newRoom]
+      );
+    }
     return;
   }
 
-  // Marquer comme initialisé seulement après un chargement réussi
-  _initialized = true;
+  if (payload.table === "tables") {
+    if (payload.eventType === "DELETE") {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      store.setTables((prev) => prev.filter(t => t.id !== (payload.old as any).id));
+    } else {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const row = payload.new as any;
+      const item: TableItem = {
+        id: row["id"],
+        number: row["number"],
+        seats: row["seats"],
+        status: row["status"] ?? "libre",
+        roomId: row["room_id"],
+      };
+      if (row["order_total"] != null) item.orderTotal = row["order_total"];
+      if (row["occupied_since"] != null) item.occupiedSince = row["occupied_since"];
+      if (row["parent_table_id"] !== undefined) item.parentTableId = row["parent_table_id"];
 
-  supabase
-    .channel("tables-rooms-realtime")
-    .on("postgres_changes", { event: "*", schema: "public", table: "rooms" }, (payload) => {
-      const store = useTableGlobalState.getState();
-      if (payload.eventType === "DELETE") {
-        store.setRooms(store.rooms.filter(r => r.id !== payload.old.id));
-      } else {
-        const newRoom = { id: payload.new.id, name: payload.new.name };
-        const exists = store.rooms.some(r => r.id === newRoom.id);
-        store.setRooms(
-          exists ? store.rooms.map(r => r.id === newRoom.id ? newRoom : r) : [...store.rooms, newRoom]
-        );
-      }
-    })
-    .on("postgres_changes", { event: "*", schema: "public", table: "tables" }, (payload) => {
-      const store = useTableGlobalState.getState();
-      if (payload.eventType === "DELETE") {
-        store.setTables((prev) => prev.filter(t => t.id !== payload.old.id));
-      } else {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const row = payload.new as any;
-        const item: TableItem = {
-          id: row["id"],
-          number: row["number"],
-          seats: row["seats"],
-          status: row["status"] ?? "libre",
-          roomId: row["room_id"],
-        };
-        if (row["order_total"] != null) item.orderTotal = row["order_total"];
-        if (row["occupied_since"] != null) item.occupiedSince = row["occupied_since"];
-        if (row["parent_table_id"] !== undefined) item.parentTableId = row["parent_table_id"];
-
-        store.setTables((prev) => {
-          if (prev.some(t => t.id === item.id)) {
-            return prev.map(t => t.id === item.id ? item : t);
-          }
-          return [...prev, item].sort((a, b) => a.number - b.number);
-        });
-      }
-    })
-    .subscribe((status, err) => {
-      if (status === "CHANNEL_ERROR" || status === "CLOSED") {
-        console.error("[tables-rooms] Realtime channel error:", status, err);
-        // Réinitialiser pour permettre une nouvelle tentative
-        _initialized = false;
-      }
-    });
+      store.setTables((prev) => {
+        if (prev.some(t => t.id === item.id)) {
+          return prev.map(t => t.id === item.id ? item : t);
+        }
+        return [...prev, item].sort((a, b) => a.number - b.number);
+      });
+    }
+  }
 }
+
+// ── Singleton RealtimeManager pour tables+rooms ───────────────────
+
+let _tableRoomManager: RealtimeManager | null = null;
+
+function getTableRoomManager(): RealtimeManager {
+  if (!_tableRoomManager) {
+    _tableRoomManager = new RealtimeManager({
+      channelName: "tables-rooms-realtime",
+      listeners: [
+        {
+          schema: "public",
+          table: "rooms",
+          onPayload: handleTableRoomPayload,
+        },
+        {
+          schema: "public",
+          table: "tables",
+          onPayload: handleTableRoomPayload,
+        },
+      ],
+      onResync: () => reloadTableStore(false),
+    });
+  }
+  return _tableRoomManager;
+}
+
+/** Exposé pour que __root.tsx puisse déclencher handleForeground() */
+export function getTableRealtimeManager(): RealtimeManager {
+  return getTableRoomManager();
+}
+
+// ── Hook Realtime (appelé une seule fois dans RootComponent) ──────
 
 export function useTableSync() {
   useEffect(() => {
-    _initTableSync();
+    const manager = getTableRoomManager();
+    void manager.init();
+    // Pas de destroy() ici : le manager est un singleton global qui doit
+    // rester actif pendant toute la durée de vie de l'app.
   }, []);
 }
 
 // ── Hook principal ────────────────────────────────────────────────
 
 export function useTableStore() {
-  const { rooms, tables, loading, setRooms, setTables, setLoading } = useTableGlobalState();
+  const { rooms, tables, loading, setTables } = useTableGlobalState();
 
   const reload = reloadTableStore;
 
@@ -260,9 +284,9 @@ export function useTableStore() {
     }
 
     for (const id of otherIds) {
-      const payload: Partial<TableItem> = { 
+      const payload: Partial<TableItem> = {
         orderTotal: 0,
-        parentTableId: primaryId 
+        parentTableId: primaryId
       };
       await updateTable(id, payload);
     }

@@ -8,8 +8,9 @@ import {
   Link,
 } from "@tanstack/react-router";
 import { useEffect, type ReactNode } from "react";
-import { useTableSync } from "../lib/tableStore";
-import { useTableOrdersSync } from "../lib/tableOrdersStore";
+import { useTableSync, getTableRealtimeManager } from "../lib/tableStore";
+import { useTableOrdersSync, getTableOrdersRealtimeManager } from "../lib/tableOrdersStore";
+import { App as CapacitorApp } from "@capacitor/app";
 
 import appCss from "../styles.css?url";
 import { reportLovableError } from "../lib/lovable-error-reporting";
@@ -132,6 +133,38 @@ function RootComponent() {
   useTableSync();
   useTableOrdersSync();
 
+  // ── Lifecycle Capacitor Android : retour au foreground ──────────────────────
+  // Quand l'app revient au premier plan, on vérifie l'état des channels
+  // Realtime et on resync les données si nécessaire.
+  useEffect(() => {
+    let mounted = true;
+
+    const registerForegroundListener = async () => {
+      try {
+        await CapacitorApp.addListener("appStateChange", ({ isActive }) => {
+          if (!mounted) return;
+          if (isActive) {
+            console.log("[Realtime:Root] FOREGROUND — vérification des channels");
+            void getTableRealtimeManager().handleForeground();
+            void getTableOrdersRealtimeManager().handleForeground();
+          }
+        });
+      } catch {
+        // Sur le web (navigateur), Capacitor App n'est pas disponible → silencieux
+      }
+    };
+
+    void registerForegroundListener();
+
+    return () => {
+      mounted = false;
+      // Cleanup : supprimer tous les listeners Capacitor pour éviter les leaks
+      void CapacitorApp.removeAllListeners().catch(() => {
+        // Ignorer les erreurs si Capacitor n'est pas disponible (web)
+      });
+    };
+  }, []);
+
   return (
     <QueryClientProvider client={queryClient}>
       {/* Required: nested routes render here. Removing <Outlet /> breaks all child routes. */}
@@ -139,4 +172,3 @@ function RootComponent() {
     </QueryClientProvider>
   );
 }
-
