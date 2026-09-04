@@ -1,4 +1,4 @@
-import { Armchair, BarChart3, Utensils, ShoppingBag } from "lucide-react";
+import { Armchair, BarChart3, Utensils, ShoppingBag, LogOut } from "lucide-react";
 import { Link, useRouterState } from "@tanstack/react-router";
 import { useTableStore } from "@/lib/tableStore";
 import { useSessionStore } from "@/lib/authStore";
@@ -17,6 +17,7 @@ export function MobileBottomNav(_props: MobileBottomNavProps) {
   const location = useRouterState({ select: s => s.location.pathname });
   const { tables, rooms } = useTableStore();
   const currentUser = useSessionStore(s => s.currentUser);
+  const logoutUser = useSessionStore(s => s.logoutUser);
   const role = currentUser?.role ?? "caisse";
   
   const emporterRoom = rooms.find(r => r.name.toLowerCase() === "emporter");
@@ -26,7 +27,7 @@ export function MobileBottomNav(_props: MobileBottomNavProps) {
   const filteredNav = role === "serveur" ? nav.filter(item => item.label !== "Rapport") : nav;
 
   return (
-    <nav className="fixed bottom-0 left-0 right-0 z-30 flex items-center justify-center gap-10 border-t border-border bg-sidebar px-2 pb-safe pt-2 md:hidden">
+    <nav className="fixed bottom-0 left-0 right-0 z-30 flex items-center justify-around border-t border-border bg-sidebar px-2 pb-safe pt-2 md:hidden">
       {filteredNav.map((item) => {
         const active = location === item.to;
         return (
@@ -47,6 +48,15 @@ export function MobileBottomNav(_props: MobileBottomNavProps) {
           </Link>
         );
       })}
+      
+      <button
+        onClick={logoutUser}
+        title="Déconnexion"
+        className="relative flex flex-col items-center gap-0.5 px-3 py-1 rounded-lg transition-colors text-sidebar-foreground/50 hover:text-destructive active:scale-95"
+      >
+        <LogOut className="h-5 w-5" />
+        <span className="text-[10px] font-medium">Quitter</span>
+      </button>
     </nav>
   );
 }
