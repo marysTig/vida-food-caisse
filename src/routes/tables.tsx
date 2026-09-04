@@ -525,7 +525,7 @@ function TablesPage() {
         </div>
 
         {/* Filters & Stats */}
-        <div className="flex shrink-0 justify-center gap-2 overflow-x-auto border-b border-border bg-card px-4 pb-3 pt-3 [&::-webkit-scrollbar]:hidden">
+        <div className="flex shrink-0 justify-start md:justify-center gap-2 overflow-x-auto border-b border-border bg-card px-4 pb-3 pt-3 [&::-webkit-scrollbar]:hidden">
           {filters.map(f => {
             const count = 
               f.value === 'toutes' ? regularTables.length : 
