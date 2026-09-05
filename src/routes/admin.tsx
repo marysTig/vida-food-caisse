@@ -1,6 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useState } from "react";
-import { ChefHat, Utensils, Armchair, BarChart3, Menu, X, Users, UserCircle } from "lucide-react";
+import { ChefHat, Utensils, Armchair, BarChart3, Menu, X, Users, UserCircle, Printer as PrinterIcon } from "lucide-react";
 import { MenuManager } from "@/components/admin/MenuManager";
 import { TableManager } from "@/components/admin/TableManager";
 import { ZReport } from "@/components/admin/ZReport";
@@ -8,18 +8,20 @@ import { AdminLogin } from "@/components/auth/AdminLogin";
 import { useAuthStore } from "@/lib/authStore";
 import { UserManager } from "@/components/admin/UserManager";
 import { AdminProfile } from "@/components/admin/AdminProfile";
+import { PrinterManager } from "@/components/admin/PrinterManager";
 
 export const Route = createFileRoute("/admin")({
   component: AdminPage,
 });
 
-type Tab = "menu" | "tables" | "rapport" | "utilisateurs" | "profil";
+type Tab = "menu" | "tables" | "rapport" | "utilisateurs" | "imprimantes" | "profil";
 
 const navItems = [
   { id: "menu"         as const, icon: Utensils,    label: "Gestion du Menu" },
   { id: "tables"       as const, icon: Armchair,    label: "Gestion des Tables" },
   { id: "rapport"      as const, icon: BarChart3,   label: "Rapport Z" },
   { id: "utilisateurs" as const, icon: Users,       label: "Utilisateurs" },
+  { id: "imprimantes"  as const, icon: PrinterIcon, label: "Imprimantes" },
   { id: "profil"       as const, icon: UserCircle,  label: "Mon Profil" },
 ];
 
@@ -106,6 +108,7 @@ function AdminPage() {
             {activeTab === "tables"       && "Gestion des Tables"}
             {activeTab === "rapport"      && "Rapport Z"}
             {activeTab === "utilisateurs" && "Gestion des Utilisateurs"}
+            {activeTab === "imprimantes"  && "Imprimantes"}
             {activeTab === "profil"       && "Mon Profil"}
           </h1>
         </header>
@@ -116,6 +119,7 @@ function AdminPage() {
           {activeTab === "tables"       && <TableManager />}
           {activeTab === "rapport"      && <ZReport />}
           {activeTab === "utilisateurs" && <UserManager />}
+          {activeTab === "imprimantes"  && <PrinterManager />}
           {activeTab === "profil"       && <AdminProfile />}
         </div>
       </main>

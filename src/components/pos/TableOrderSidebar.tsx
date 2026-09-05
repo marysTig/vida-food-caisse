@@ -12,6 +12,9 @@ import { type CartItem, cartSubtotal, lineTotal } from "@/lib/cart";
 import { useTableStore } from "@/lib/tableStore";
 import { useTableOrdersStore } from "@/lib/tableOrdersStore";
 import { useSessionStore } from "@/lib/authStore";
+import { usePrinterStore } from "@/lib/printerStore";
+import { printerService } from "@/lib/printerService";
+import { toast } from "sonner";
 import { ComponentLoader } from "@/components/ui/PageLoader";
 
 type TableOrderSidebarProps = {
@@ -367,6 +370,7 @@ export function TableOrderSidebar({ tableId, tableNumber, mergedIds, onClose }: 
   const [cartOpen, setCartOpen] = useState(isOccupied);
 
   const { products, allCategoryNames, loading } = useMenuStore();
+  const { printers } = usePrinterStore();
 
   // Sync items to local store whenever they change
   useEffect(() => {
@@ -475,6 +479,22 @@ export function TableOrderSidebar({ tableId, tableNumber, mergedIds, onClose }: 
       }
     }
 
+    // --- IMPRESSION CUISINE (Plaque / Four) ---
+    try {
+      const kitchenPrinters = printers.filter(p => p.enabled && (p.type === "plaque" || p.type === "four"));
+      
+      for (const printer of kitchenPrinters) {
+        // Envoi asynchrone pour ne pas bloquer l'UI
+        printerService.printKitchen(printer, items, tableNumber, orderNote).catch(err => {
+          console.error(`Erreur d'impression cuisine sur ${printer.name}:`, err);
+          toast.error(`Erreur d'impression cuisine (${printer.name})`, { description: err.message });
+        });
+      }
+    } catch (err) {
+      console.error("Impossible de lancer l'impression cuisine", err);
+    }
+    // ------------------------------------------
+
     onClose();
   };
 
@@ -500,6 +520,20 @@ export function TableOrderSidebar({ tableId, tableNumber, mergedIds, onClose }: 
         parentTableId: null
       });
     }
+
+    // --- IMPRESSION CAISSE ---
+    try {
+      const cashierPrinters = printers.filter(p => p.enabled && p.type === "caisse");
+      for (const printer of cashierPrinters) {
+        printerService.printReceipt(printer.id, items, cartSubtotal(items), tableNumber).catch(err => {
+          console.error("Erreur d'impression caisse:", err);
+          toast.error("Erreur d'impression caisse", { description: err.message });
+        });
+      }
+    } catch (err) {
+      console.error("Impossible de lancer l'impression caisse", err);
+    }
+    // -------------------------
 
     onClose();
   };

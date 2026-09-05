@@ -10,6 +10,10 @@ import { formatDA } from "@/data/menu";
 import { useTableStore } from "@/lib/tableStore";
 import { useTableOrdersStore } from "@/lib/tableOrdersStore";
 import { ComponentLoader } from "@/components/ui/PageLoader";
+import { usePrinterStore } from "@/lib/printerStore";
+import { printerService } from "@/lib/printerService";
+import { cartSubtotal } from "@/lib/cart";
+import { toast } from "sonner";
 
 export const Route = createFileRoute("/emporter")({
   head: () => ({
@@ -21,6 +25,7 @@ export const Route = createFileRoute("/emporter")({
 function EmporterPage() {
   const { tables: tableData, loading, updateTable, rooms } = useTableStore();
   const { orders, orderNotes, clearOrder } = useTableOrdersStore();
+  const { printers } = usePrinterStore();
 
   const [activeTable, setActiveTable] = useState<{ id: string; number: number } | null>(null);
   const [checkoutTable, setCheckoutTable] = useState<{ id: string; number: number } | null>(null);
@@ -40,12 +45,31 @@ function EmporterPage() {
 
   const handleQuickCheckout = async () => {
     if (!checkoutTable) return;
+    
+    // Récupérer les items avant de clear
+    const itemsToPrint = orders[checkoutTable.id] || [];
+    
     clearOrder(checkoutTable.id);
     await updateTable(checkoutTable.id, {
       status: "libre",
       orderTotal: 0,
       occupiedSince: null as any,
     });
+    
+    // --- IMPRESSION CAISSE ---
+    try {
+      const cashierPrinters = printers.filter(p => p.enabled && p.type === "caisse");
+      for (const printer of cashierPrinters) {
+        printerService.printReceipt(printer.id, itemsToPrint, cartSubtotal(itemsToPrint), `Emporter #${checkoutTable.number}`).catch(err => {
+          console.error("Erreur d'impression caisse:", err);
+          toast.error("Erreur d'impression caisse", { description: err.message });
+        });
+      }
+    } catch (err) {
+      console.error("Impossible de lancer l'impression caisse", err);
+    }
+    // -------------------------
+
     setCheckoutTable(null);
   };
 
