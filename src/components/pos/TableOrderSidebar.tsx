@@ -525,7 +525,7 @@ export function TableOrderSidebar({ tableId, tableNumber, mergedIds, onClose }: 
     try {
       const cashierPrinters = printers.filter(p => p.enabled && p.type === "caisse");
       for (const printer of cashierPrinters) {
-        printerService.printReceipt(printer.id, items, cartSubtotal(items), tableNumber).catch(err => {
+        printerService.printReceipt(printer, items, cartSubtotal(items), tableNumber).catch(err => {
           console.error("Erreur d'impression caisse:", err);
           toast.error("Erreur d'impression caisse", { description: err.message });
         });

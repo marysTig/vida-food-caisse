@@ -12,6 +12,8 @@ export function PrinterManager() {
   
   const [editingId, setEditingId] = useState<string | null>(null);
   const [formData, setFormData] = useState<Partial<Printer>>({});
+  const [pairedDevices, setPairedDevices] = useState<{name: string, address: string}[]>([]);
+  const [scanning, setScanning] = useState(false);
   
   // Refresh force state when connecting printers to update UI
   const [, setForceRender] = useState(0);
@@ -41,6 +43,19 @@ export function PrinterManager() {
   const handleCancel = () => {
     setEditingId(null);
     setFormData({});
+    setPairedDevices([]);
+  };
+
+  const scanDevices = async () => {
+    setScanning(true);
+    try {
+      const devices = await printerService.getPairedDevices();
+      setPairedDevices(devices);
+      if (devices.length === 0) toast.info("Aucun appareil Bluetooth associé trouvé sur la tablette.");
+    } catch (err: any) {
+      toast.error("Erreur de scan Bluetooth", { description: err.message });
+    }
+    setScanning(false);
   };
 
   const handleTestPrint = async (printer: Printer) => {
@@ -105,6 +120,46 @@ export function PrinterManager() {
             </select>
           </div>
         </div>
+
+        {printerService.isNativePlatform() && (
+          <div>
+            <label className="mb-1 block text-xs font-semibold text-muted-foreground">Appareil Bluetooth (Adresse MAC)</label>
+            <div className="flex gap-2">
+              <input
+                type="text"
+                value={formData.mac_address || ""}
+                onChange={e => setFormData({ ...formData, mac_address: e.target.value })}
+                placeholder="Sélectionnez un appareil ci-contre ->"
+                className="flex-1 rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground focus:border-primary focus:outline-none font-mono"
+              />
+              <button
+                type="button"
+                onClick={scanDevices}
+                disabled={scanning}
+                className="rounded-lg border border-border bg-secondary px-3 py-2 text-sm font-medium text-secondary-foreground hover:bg-secondary/80 disabled:opacity-50"
+              >
+                {scanning ? "Recherche..." : "Rechercher"}
+              </button>
+            </div>
+            {pairedDevices.length > 0 && (
+              <div className="mt-2 flex flex-col gap-1 rounded-md border border-border bg-muted/30 p-2 max-h-40 overflow-y-auto">
+                <p className="text-xs text-muted-foreground mb-1 font-semibold">Appareils appairés (cliquez pour sélectionner) :</p>
+                {pairedDevices.map(d => (
+                  <button
+                    key={d.address}
+                    type="button"
+                    onClick={() => setFormData({ ...formData, mac_address: d.address })}
+                    className={`flex items-center justify-between rounded px-3 py-2 text-left text-sm transition-colors ${formData.mac_address === d.address ? 'bg-primary text-primary-foreground font-medium' : 'hover:bg-muted bg-background border border-transparent hover:border-border'}`}
+                  >
+                    <span>{d.name || "Appareil Inconnu"}</span>
+                    <span className={`text-xs ${formData.mac_address === d.address ? 'text-primary-foreground/80' : 'text-muted-foreground'}`}>{d.address}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+            <p className="text-[10px] text-muted-foreground mt-1">Vous devez d'abord associer (appairer) l'imprimante dans les réglages Bluetooth d'Android.</p>
+          </div>
+        )}
 
         {isPlaqueOrFour && (
           <div>
