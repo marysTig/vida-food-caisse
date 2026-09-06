@@ -17,6 +17,13 @@ import { printerService } from "@/lib/printerService";
 import { toast } from "sonner";
 import { ComponentLoader } from "@/components/ui/PageLoader";
 
+// ── Guard anti-double-impression cuisine ──────────────────────────────────────
+// Set module-level (singleton pour toute la durée de la session JS).
+// Clé : tableId. Une table y est ajoutée au moment où la cuisine imprime,
+// et retirée quand le sidebar se ferme → une nouvelle session peut ré-imprimer.
+// Ceci protège contre : double-clic, re-renders, mises à jour Realtime Zustand.
+const _kitchenPrintedSet = new Set<string>();
+
 type TableOrderSidebarProps = {
   tableId: string;
   tableNumber: number;
@@ -372,11 +379,6 @@ export function TableOrderSidebar({ tableId, tableNumber, mergedIds, onClose }: 
   const { products, allCategoryNames, loading } = useMenuStore();
   const { printers } = usePrinterStore();
 
-  // Guard anti-double-impression cuisine (double-clic, re-render Realtime)
-  // Mémorise le timestamp du dernier envoi ; un second déclenchement
-  // dans la fenêtre de 3 s est ignoré.
-  const lastKitchenPrintMs = useRef<number>(0);
-
   // Sync items to local store whenever they change
   useEffect(() => {
     setOrder(tableId, items);
@@ -485,27 +487,30 @@ export function TableOrderSidebar({ tableId, tableNumber, mergedIds, onClose }: 
     }
 
     // --- IMPRESSION CUISINE (Plaque / Four) ---
+    // Guard : ne déclenche qu'une seule fois par ouverture du sidebar pour cette table.
+    // Protège contre double-clic, re-renders et événements Realtime Zustand.
     try {
-      const now_ms = Date.now();
-      const DEBOUNCE_MS = 3000; // 3 secondes — protège contre double-clic / re-render
-      if (now_ms - lastKitchenPrintMs.current >= DEBOUNCE_MS) {
-        lastKitchenPrintMs.current = now_ms;
+      if (!_kitchenPrintedSet.has(tableId)) {
+        _kitchenPrintedSet.add(tableId);
         const kitchenPrinters = printers.filter(p => p.enabled && (p.type === "plaque" || p.type === "four"));
         for (const printer of kitchenPrinters) {
-          // Envoi asynchrone — une erreur Bluetooth ne bloque jamais la commande
+          // Asynchrone — une erreur Bluetooth ne bloque jamais la commande
           printerService.printKitchen(printer, items, tableNumber, orderNote).catch(err => {
-            console.error(`Erreur d'impression cuisine sur ${printer.name}:`, err);
+            console.error(`[Cuisine] Erreur impression ${printer.name}:`, err);
             toast.error(`Erreur d'impression cuisine (${printer.name})`, { description: err.message });
           });
         }
+        console.log(`[Cuisine] Impression lancée pour table ${tableId} (${kitchenPrinters.length} imprimante(s)).`);
       } else {
-        console.log("[Printer] Impression cuisine ignorée (double-déclenchement détecté).");
+        console.log(`[Cuisine] Déjà imprimé pour table ${tableId} — ignoré.`);
       }
     } catch (err) {
       console.error("Impossible de lancer l'impression cuisine", err);
     }
     // ------------------------------------------
 
+    // Nettoyer le guard — le sidebar va se fermer
+    _kitchenPrintedSet.delete(tableId);
     onClose();
   };
 
@@ -554,6 +559,8 @@ export function TableOrderSidebar({ tableId, tableNumber, mergedIds, onClose }: 
     }
     // -------------------------
 
+    // Nettoyer le guard cuisine (la table est libérée, session terminée)
+    _kitchenPrintedSet.delete(tableId);
     onClose();
   };
 
