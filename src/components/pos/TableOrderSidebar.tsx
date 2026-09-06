@@ -499,9 +499,14 @@ export function TableOrderSidebar({ tableId, tableNumber, mergedIds, onClose }: 
   };
 
   const handleCheckout = async () => {
+    // --- SAUVEGARDE DES DONNEES POUR IMPRESSION ---
+    const itemsToPrint = [...items];
+    const totalToPrint = cartSubtotal(itemsToPrint);
+    // ----------------------------------------------
+
     // 1. Clear local items + note
     clearOrder(tableId);
-    setOrderNote_("")
+    setOrderNote_("");
     // 2. Update DB to free the table
     await updateTable(tableId, {
       status: "libre",
@@ -524,8 +529,11 @@ export function TableOrderSidebar({ tableId, tableNumber, mergedIds, onClose }: 
     // --- IMPRESSION CAISSE ---
     try {
       const cashierPrinters = printers.filter(p => p.enabled && p.type === "caisse");
+      if (cashierPrinters.length === 0) {
+        console.warn("Aucune imprimante de caisse trouvée.");
+      }
       for (const printer of cashierPrinters) {
-        printerService.printReceipt(printer, items, cartSubtotal(items), tableNumber).catch(err => {
+        printerService.printReceipt(printer, itemsToPrint, totalToPrint, tableNumber).catch(err => {
           console.error("Erreur d'impression caisse:", err);
           toast.error("Erreur d'impression caisse", { description: err.message });
         });
