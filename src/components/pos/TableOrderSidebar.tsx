@@ -365,9 +365,9 @@ export function TableOrderSidebar({ tableId, tableNumber, mergedIds, onClose }: 
   const [category, setCategory] = useState<Category>("Tous");
   const [query, setQuery] = useState("");
 
-  // Initialize items from the store if they exist
-  const [items, setItems] = useState<CartItem[]>(orders[tableId] || []);
-  const [orderNote, setOrderNote_] = useState<string>(orderNotes[tableId] || "");
+  // Get items and note directly from store to ensure Realtime updates are visible immediately
+  const items = orders[tableId] || [];
+  const orderNote = orderNotes[tableId] || "";
 
   const [editing, setEditing] = useState<CartItem | null>(null);
   const [modifierOpen, setModifierOpen] = useState(false);
@@ -381,15 +381,7 @@ export function TableOrderSidebar({ tableId, tableNumber, mergedIds, onClose }: 
   const { products, allCategoryNames, loading } = useMenuStore();
   const { printers } = usePrinterStore();
 
-  // Sync items to local store whenever they change
-  useEffect(() => {
-    setOrder(tableId, items);
-  }, [items, tableId, setOrder]);
 
-  // Sync order note to store
-  useEffect(() => {
-    setOrderNote(tableId, orderNote);
-  }, [orderNote, tableId, setOrderNote]);
 
   const visibleProducts = useMemo(() => {
     const term = query.trim().toLowerCase();
@@ -412,43 +404,46 @@ export function TableOrderSidebar({ tableId, tableNumber, mergedIds, onClose }: 
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const addProduct = (product: Product, selectedOption?: ProductOption) => {
-    setItems((prev) => {
-      const existing = prev.find(
-        (item) =>
-          item.product.id === product.id &&
-          item.supplements.length === 0 &&
-          !item.note &&
-          item.selectedOption?.label === selectedOption?.label,
-      );
-      if (existing) {
-        return prev.map((item) =>
-          item.id === existing.id ? { ...item, quantity: item.quantity + 1 } : item,
-        );
-      }
-      return [
+    const prev = orders[tableId] || [];
+    const existing = prev.find(
+      (item) =>
+        item.product.id === product.id &&
+        item.supplements.length === 0 &&
+        !item.note &&
+        item.selectedOption?.label === selectedOption?.label,
+    );
+    if (existing) {
+      setOrder(tableId, prev.map((item) =>
+        item.id === existing.id ? { ...item, quantity: item.quantity + 1 } : item,
+      ));
+    } else {
+      setOrder(tableId, [
         ...prev,
         { id: `${product.id}-${Date.now()}`, product, quantity: 1, supplements: [], selectedOption },
-      ];
-    });
+      ]);
+    }
   };
 
-  const increase = useCallback((id: string) =>
-    setItems((prev) =>
-      prev.map((item) => (item.id === id ? { ...item, quantity: item.quantity + 1 } : item)),
-    ), []);
+  const increase = useCallback((id: string) => {
+    const prev = orders[tableId] || [];
+    setOrder(tableId, prev.map((item) => (item.id === id ? { ...item, quantity: item.quantity + 1 } : item)));
+  }, [orders, tableId, setOrder]);
 
-  const decrease = useCallback((id: string) =>
-    setItems((prev) =>
-      prev.flatMap((item) =>
-        item.id === id
-          ? item.quantity > 1
-            ? [{ ...item, quantity: item.quantity - 1 }]
-            : []
-          : [item],
-      ),
-    ), []);
+  const decrease = useCallback((id: string) => {
+    const prev = orders[tableId] || [];
+    setOrder(tableId, prev.flatMap((item) =>
+      item.id === id
+        ? item.quantity > 1
+          ? [{ ...item, quantity: item.quantity - 1 }]
+          : []
+        : [item],
+    ));
+  }, [orders, tableId, setOrder]);
 
-  const remove = useCallback((id: string) => setItems((prev) => prev.filter((item) => item.id !== id)), []);
+  const remove = useCallback((id: string) => {
+    const prev = orders[tableId] || [];
+    setOrder(tableId, prev.filter((item) => item.id !== id));
+  }, [orders, tableId, setOrder]);
 
   const confirmModifier = (
     id: string,
@@ -456,13 +451,12 @@ export function TableOrderSidebar({ tableId, tableNumber, mergedIds, onClose }: 
     note: string,
     customPrice?: number,
   ) => {
-    setItems((prev) =>
-      prev.map((item) =>
-        item.id === id
-          ? { ...item, supplements, note: note.trim() || undefined, customPrice }
-          : item,
-      ),
-    );
+    const prev = orders[tableId] || [];
+    setOrder(tableId, prev.map((item) =>
+      item.id === id
+        ? { ...item, supplements, note: note.trim() || undefined, customPrice }
+        : item,
+    ));
     setModifierOpen(false);
   };
 
@@ -553,9 +547,8 @@ export function TableOrderSidebar({ tableId, tableNumber, mergedIds, onClose }: 
     const totalToPrint = cartSubtotal(itemsToPrint);
     // ----------------------------------------------
 
-    // 1. Clear local items + note
+    // 1. Clear items + note
     clearOrder(tableId);
-    setOrderNote_("");
     // 2. Update DB to free the table
     await updateTable(tableId, {
       status: "libre",
@@ -602,7 +595,7 @@ export function TableOrderSidebar({ tableId, tableNumber, mergedIds, onClose }: 
 
   // Stable callbacks pour les sous-composants
   const handleOpenCheckout = useCallback(() => setCheckoutOpen(true), []);
-  const handleNoteChange = useCallback((note: string) => setOrderNote_(note), []);
+  const handleNoteChange = useCallback((note: string) => setOrderNote(tableId, note), [tableId, setOrderNote]);
 
   return (
     <div className="fixed inset-0 z-[100] flex justify-end bg-black/50 backdrop-blur-sm">
@@ -752,7 +745,7 @@ export function TableOrderSidebar({ tableId, tableNumber, mergedIds, onClose }: 
                     <NotebookPen className="h-3.5 w-3.5" />
                     Note de commande
                   </label>
-                  <OrderNoteInput value={orderNote} onChange={setOrderNote_} />
+                  <OrderNoteInput value={orderNote} onChange={handleNoteChange} />
                 </div>
 
                 {/* Bouton valider / encaisser */}
