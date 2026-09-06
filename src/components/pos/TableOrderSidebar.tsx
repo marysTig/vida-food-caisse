@@ -15,6 +15,7 @@ import { useSessionStore } from "@/lib/authStore";
 import { supabase } from "@/lib/supabase";
 import { usePrinterStore } from "@/lib/printerStore";
 import { printerService } from "@/lib/printerService";
+import { sendKitchenBroadcast } from "@/lib/kitchenPrintSender";
 import { toast } from "sonner";
 import { ComponentLoader } from "@/components/ui/PageLoader";
 
@@ -499,16 +500,17 @@ export function TableOrderSidebar({ tableId, tableNumber, mergedIds, onClose }: 
           // Le serveur n'essaie pas d'imprimer en Bluetooth depuis son téléphone. 
           // Il broadcast l'ordre à la Caisse qui s'en chargera via KitchenPrintHub.
           console.log("[SERVER ORDER] Broadcasting print order to Caisse hub");
-          supabase.channel("kitchen-print-hub").send({
-            type: "broadcast",
-            event: "print_order",
-            payload: {
-              printId,
-              tableId,
-              tableNumber,
-              items,
-              orderNote
-            }
+          sendKitchenBroadcast({
+            printId,
+            tableId,
+            tableNumber,
+            items,
+            orderNote
+          }).then(() => {
+            console.log("[SERVER ORDER] Broadcast sent successfully");
+          }).catch(err => {
+            console.error("[SERVER ORDER] Failed to broadcast:", err);
+            toast.error("Erreur de connexion pour l'impression cuisine.");
           });
         } else {
           // La Caisse imprime directement sans passer par le Hub
