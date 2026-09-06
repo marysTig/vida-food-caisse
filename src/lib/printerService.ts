@@ -217,16 +217,24 @@ export const printerService = {
     if (filteredItems.length === 0) return;
 
     const now = new Date();
+    const dateStr = now.toLocaleDateString("fr-FR", { day: "2-digit", month: "2-digit", year: "numeric" });
     const timeStr = now.toLocaleTimeString("fr-FR", { hour: '2-digit', minute: '2-digit' });
+    const SEP = "--------------------\n";
 
     let ticket = INIT;
-    ticket += ALIGN_CENTER + BOLD_ON + `POSTE : ${printer.type.toUpperCase()}\n` + BOLD_OFF;
-    ticket += DOUBLE_HEIGHT_WIDTH + `COMMANDE #${orderNumber}\n` + NORMAL_SIZE;
+
+    // ── En-tête restaurant ──────────────────────────────
+    ticket += ALIGN_CENTER;
+    ticket += DOUBLE_HEIGHT_WIDTH + BOLD_ON + "LA VIDA FOOD\n" + NORMAL_SIZE + BOLD_OFF;
+    ticket += BOLD_ON + `COMMANDE #${orderNumber}\n` + BOLD_OFF;
+    ticket += `${dateStr}\n`;
     ticket += `${timeStr}\n`;
-    ticket += "--------------------------------\n";
-    
+    ticket += LF;
+
+    // ── Articles filtrés ────────────────────────────────
     ticket += ALIGN_LEFT;
     for (const item of filteredItems) {
+      ticket += SEP;
       ticket += BOLD_ON + `${item.quantity} x ${item.product.name}\n` + BOLD_OFF;
       if (item.selectedOption) {
         ticket += `  (${item.selectedOption.label})\n`;
@@ -237,12 +245,13 @@ export const printerService = {
       if (item.note) {
         ticket += `  *** Note: ${item.note} ***\n`;
       }
-      ticket += "\n";
+      ticket += SEP;
     }
 
+    // ── Note globale de commande ────────────────────────
     if (orderNote) {
-      ticket += "--------------------------------\n";
-      ticket += BOLD_ON + `NOTE COMMANDE :\n${orderNote}\n` + BOLD_OFF;
+      ticket += LF;
+      ticket += ALIGN_CENTER + BOLD_ON + `NOTE : ${orderNote}\n` + BOLD_OFF;
     }
 
     ticket += "\n\n\n\n";

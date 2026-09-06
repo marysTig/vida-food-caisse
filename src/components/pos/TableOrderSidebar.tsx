@@ -372,6 +372,11 @@ export function TableOrderSidebar({ tableId, tableNumber, mergedIds, onClose }: 
   const { products, allCategoryNames, loading } = useMenuStore();
   const { printers } = usePrinterStore();
 
+  // Guard anti-double-impression cuisine (double-clic, re-render Realtime)
+  // Mémorise le timestamp du dernier envoi ; un second déclenchement
+  // dans la fenêtre de 3 s est ignoré.
+  const lastKitchenPrintMs = useRef<number>(0);
+
   // Sync items to local store whenever they change
   useEffect(() => {
     setOrder(tableId, items);
@@ -481,14 +486,20 @@ export function TableOrderSidebar({ tableId, tableNumber, mergedIds, onClose }: 
 
     // --- IMPRESSION CUISINE (Plaque / Four) ---
     try {
-      const kitchenPrinters = printers.filter(p => p.enabled && (p.type === "plaque" || p.type === "four"));
-      
-      for (const printer of kitchenPrinters) {
-        // Envoi asynchrone pour ne pas bloquer l'UI
-        printerService.printKitchen(printer, items, tableNumber, orderNote).catch(err => {
-          console.error(`Erreur d'impression cuisine sur ${printer.name}:`, err);
-          toast.error(`Erreur d'impression cuisine (${printer.name})`, { description: err.message });
-        });
+      const now_ms = Date.now();
+      const DEBOUNCE_MS = 3000; // 3 secondes — protège contre double-clic / re-render
+      if (now_ms - lastKitchenPrintMs.current >= DEBOUNCE_MS) {
+        lastKitchenPrintMs.current = now_ms;
+        const kitchenPrinters = printers.filter(p => p.enabled && (p.type === "plaque" || p.type === "four"));
+        for (const printer of kitchenPrinters) {
+          // Envoi asynchrone — une erreur Bluetooth ne bloque jamais la commande
+          printerService.printKitchen(printer, items, tableNumber, orderNote).catch(err => {
+            console.error(`Erreur d'impression cuisine sur ${printer.name}:`, err);
+            toast.error(`Erreur d'impression cuisine (${printer.name})`, { description: err.message });
+          });
+        }
+      } else {
+        console.log("[Printer] Impression cuisine ignorée (double-déclenchement détecté).");
       }
     } catch (err) {
       console.error("Impossible de lancer l'impression cuisine", err);
