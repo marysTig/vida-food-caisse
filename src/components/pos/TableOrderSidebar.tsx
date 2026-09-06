@@ -361,7 +361,7 @@ export function TableOrderSidebar({ tableId, tableNumber, mergedIds, onClose }: 
     ? mergedIds.map(id => tables.find(t => t.id === id)?.number).filter(Boolean).join(", ")
     : null;
 
-  const { orders, orderNotes, setOrder, setOrderNote, flushOrder, clearOrder } = useTableOrdersStore();
+  const { orders, orderNotes, setOrder, setOrderNote, flushOrder, clearOrder, _patchOrder, _patchNote } = useTableOrdersStore();
 
   const [category, setCategory] = useState<Category>("Tous");
   const [query, setQuery] = useState("");
@@ -381,6 +381,54 @@ export function TableOrderSidebar({ tableId, tableNumber, mergedIds, onClose }: 
 
   const { products, allCategoryNames, loading } = useMenuStore();
   const { printers } = usePrinterStore();
+
+  useEffect(() => {
+    let mounted = true;
+
+    // Seulement si la table est censée être occupée et que c'est la caisse qui ouvre
+    if (isOccupied && !isServeur) {
+      const fetchOrderData = async (retries = 3) => {
+        for (let i = 0; i < retries; i++) {
+          if (!mounted) return;
+          try {
+            const { data, error } = await supabase
+              .from("table_orders")
+              .select("items, note")
+              .eq("table_id", tableId)
+              .maybeSingle();
+            
+            if (error) {
+              console.error("[CASHIER ORDER] Erreur SELECT table_orders:", error);
+              break; // Arrêter les retries si erreur réseau/SQL grave
+            }
+
+            if (data && data.items && (data.items as CartItem[]).length > 0) {
+              console.log("[CASHIER ORDER] Données récupérées avec succès:", data.items);
+              if (mounted) {
+                _patchOrder(tableId, data.items as CartItem[]);
+                _patchNote(tableId, data.note || "");
+              }
+              break; // Succès, on arrête les retries
+            } else if (i < retries - 1) {
+              // Si pas de données mais que la table est "occupee", on attend un peu
+              // pour pallier au timing (flushOrder du Serveur peut être en cours)
+              console.log(`[CASHIER ORDER] Aucun item trouvé, retry ${i + 1}/${retries}...`);
+              await new Promise(r => setTimeout(r, 800));
+            }
+          } catch (err) {
+            console.error("[CASHIER ORDER] Exception SELECT:", err);
+            break;
+          }
+        }
+      };
+
+      void fetchOrderData();
+    }
+
+    return () => {
+      mounted = false;
+    };
+  }, [tableId, isOccupied, isServeur, _patchOrder, _patchNote]);
 
 
 
@@ -462,6 +510,10 @@ export function TableOrderSidebar({ tableId, tableNumber, mergedIds, onClose }: 
   };
 
   const handleValidateOrder = async () => {
+    console.log("[SERVER ORDER] Creating order");
+    console.log("[SERVER ORDER] Table ID:", tableId);
+    console.log("[SERVER ORDER] Order ID: (Items have individual IDs)");
+    console.log("[SERVER ORDER] Items:", items);
     console.log("[SERVER ORDER] Commander clicked");
     const total = cartSubtotal(items);
     const now = new Date().toISOString();
@@ -540,7 +592,9 @@ export function TableOrderSidebar({ tableId, tableNumber, mergedIds, onClose }: 
 
     // Flush immédiat vers Supabase — garantit que la Caisse verra les items
     // dans table_orders AVANT d'ouvrir le modal d'encaissement.
+    console.log("[SERVER ORDER] Saving table_orders");
     await flushOrder(tableId);
+    console.log("[SERVER ORDER] table_orders saved");
 
     // Nettoyer le guard — le sidebar va se fermer
     _kitchenPrintedSet.delete(tableId);
