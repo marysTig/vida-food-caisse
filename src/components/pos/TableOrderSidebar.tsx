@@ -12,6 +12,7 @@ import { type CartItem, cartSubtotal, lineTotal } from "@/lib/cart";
 import { useTableStore } from "@/lib/tableStore";
 import { useTableOrdersStore } from "@/lib/tableOrdersStore";
 import { useSessionStore } from "@/lib/authStore";
+import { supabase } from "@/lib/supabase";
 import { usePrinterStore } from "@/lib/printerStore";
 import { printerService } from "@/lib/printerService";
 import { toast } from "sonner";
@@ -53,6 +54,7 @@ function OrderNoteInput({ value, onChange }: OrderNoteInputProps) {
       }, 400);
       return () => clearTimeout(timer);
     }
+    return undefined;
   }, [localNote, value]);
 
   const handleBlur = () => {
@@ -465,6 +467,7 @@ export function TableOrderSidebar({ tableId, tableNumber, mergedIds, onClose }: 
   };
 
   const handleValidateOrder = async () => {
+    console.log("[SERVER ORDER] Commander clicked");
     const total = cartSubtotal(items);
     const now = new Date().toISOString();
     await updateTable(tableId, {
@@ -485,24 +488,54 @@ export function TableOrderSidebar({ tableId, tableNumber, mergedIds, onClose }: 
         }
       }
     }
+    console.log("[SERVER ORDER] Order created");
 
     // --- IMPRESSION CUISINE (Plaque / Four) ---
     // Guard : ne déclenche qu'une seule fois par ouverture du sidebar pour cette table.
     // Protège contre double-clic, re-renders et événements Realtime Zustand.
     try {
+      console.log("[SERVER PRINT] Starting kitchen print logic");
       if (!_kitchenPrintedSet.has(tableId)) {
         _kitchenPrintedSet.add(tableId);
-        const kitchenPrinters = printers.filter(p => p.enabled && (p.type === "plaque" || p.type === "four"));
-        for (const printer of kitchenPrinters) {
-          // Asynchrone — une erreur Bluetooth ne bloque jamais la commande
-          printerService.printKitchen(printer, items, tableNumber, orderNote).catch(err => {
-            console.error(`[Cuisine] Erreur impression ${printer.name}:`, err);
-            toast.error(`Erreur d'impression cuisine (${printer.name})`, { description: err.message });
+        
+        const printId = crypto.randomUUID();
+        
+        if (isServeur) {
+          // OPTION B : HUB D'IMPRESSION
+          // Le serveur n'essaie pas d'imprimer en Bluetooth depuis son téléphone. 
+          // Il broadcast l'ordre à la Caisse qui s'en chargera via KitchenPrintHub.
+          console.log("[SERVER ORDER] Broadcasting print order to Caisse hub");
+          supabase.channel("kitchen-print-hub").send({
+            type: "broadcast",
+            event: "print_order",
+            payload: {
+              printId,
+              tableId,
+              tableNumber,
+              items,
+              orderNote
+            }
           });
+        } else {
+          // La Caisse imprime directement sans passer par le Hub
+          const kitchenPrinters = printers.filter(p => p.enabled && (p.type === "plaque" || p.type === "four"));
+          console.log(`[CAISSE PRINT] Active printers:`, kitchenPrinters);
+          for (const printer of kitchenPrinters) {
+            console.log(`[CAISSE PRINT] Printing to ${printer.name}`);
+            // Asynchrone — une erreur Bluetooth ne bloque jamais la commande
+            printerService.printKitchen(printer, items, tableNumber, orderNote)
+              .then(() => {
+                console.log(`[CAISSE PRINT] Print success for ${printer.name}`);
+              })
+              .catch(err => {
+                console.error(`[Cuisine] Erreur impression ${printer.name}:`, err);
+                toast.error(`Erreur d'impression cuisine (${printer.name})`, { description: err.message });
+              });
+          }
+          console.log(`[Cuisine] Impression directe lancée pour table ${tableId} (${kitchenPrinters.length} imprimante(s)).`);
         }
-        console.log(`[Cuisine] Impression lancée pour table ${tableId} (${kitchenPrinters.length} imprimante(s)).`);
       } else {
-        console.log(`[Cuisine] Déjà imprimé pour table ${tableId} — ignoré.`);
+        console.log(`[Cuisine] Déjà imprimé/broadcasté pour table ${tableId} — ignoré.`);
       }
     } catch (err) {
       console.error("Impossible de lancer l'impression cuisine", err);

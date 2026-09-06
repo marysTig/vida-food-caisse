@@ -18,7 +18,7 @@ import { cartSubtotal } from "@/lib/cart";
 import { toast } from "sonner";
 import { UserLogin } from "@/components/auth/UserLogin";
 import { ComponentLoader } from "@/components/ui/PageLoader";
-
+import { KitchenPrintHub } from "@/components/pos/KitchenPrintHub";
 
 export const Route = createFileRoute("/tables")({
   head: () => ({
@@ -694,6 +694,9 @@ function TablesPage() {
         }}
         onConfirm={handleQuickCheckout}
       />
+      
+      {/* Hub d'impression : Actif uniquement sur la caisse */}
+      {currentUser?.role !== 'serveur' && <KitchenPrintHub />}
     </div>
   );
 }
