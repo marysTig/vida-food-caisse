@@ -12,6 +12,10 @@ import { formatDA } from "@/data/menu";
 import { useTableStore, type TableItem } from "@/lib/tableStore";
 import { useTableOrdersStore } from "@/lib/tableOrdersStore";
 import { useSessionStore } from "@/lib/authStore";
+import { usePrinterStore } from "@/lib/printerStore";
+import { printerService } from "@/lib/printerService";
+import { cartSubtotal } from "@/lib/cart";
+import { toast } from "sonner";
 import { UserLogin } from "@/components/auth/UserLogin";
 import { ComponentLoader } from "@/components/ui/PageLoader";
 
@@ -239,6 +243,7 @@ function TablesPage() {
   const { tables: tableData, loading: tablesLoading, updateTable, rooms, addRoom, addTable, mergeTablesDB } = useTableStore();
   const { orders, orderNotes, clearOrder, mergeOrders } = useTableOrdersStore();
   const currentUser = useSessionStore((s) => s.currentUser);
+  const { printers } = usePrinterStore();
 
   const [filter, setFilter]           = useState<TableStatus | "toutes">("toutes");
   const [activeTable, setActiveTable] = useState<{ id: string; number: number; mergedIds?: string[] } | null>(null);
@@ -400,6 +405,14 @@ function TablesPage() {
   // ── Confirmation d'encaissement depuis la carte table
   const handleQuickCheckout = async () => {
     if (!checkoutTable) return;
+
+    // --- Snapshot des items AVANT clearOrder ---
+    const allIds = [checkoutTable.id, ...multiCheckoutTables];
+    const itemsToPrint = allIds.flatMap(id => orders[id] ?? []);
+    const totalToPrint = cartSubtotal(itemsToPrint);
+    const tableNumber = checkoutTable.number;
+    // -------------------------------------------
+
     clearOrder(checkoutTable.id);
     await updateTable(checkoutTable.id, {
       status: "libre",
@@ -445,6 +458,20 @@ function TablesPage() {
     }
 
     setCheckoutTable(null);
+
+    // --- IMPRESSION CAISSE ---
+    try {
+      const cashierPrinters = printers.filter(p => p.enabled && p.type === "caisse");
+      for (const printer of cashierPrinters) {
+        printerService.printReceipt(printer, itemsToPrint, totalToPrint, tableNumber).catch(err => {
+          console.error("Erreur d'impression caisse:", err);
+          toast.error("Erreur d'impression caisse", { description: err.message });
+        });
+      }
+    } catch (err) {
+      console.error("Impossible de lancer l'impression caisse", err);
+    }
+    // -------------------------
   };
 
   const handleMultiCheckoutClick = () => {
