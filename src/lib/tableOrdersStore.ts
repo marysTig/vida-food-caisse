@@ -17,6 +17,7 @@ type TableOrdersState = {
   // Public API — identical to the previous localStorage store
   setOrder: (tableId: string, items: CartItem[]) => void;
   setOrderNote: (tableId: string, note: string) => void;
+  flushOrder: (tableId: string) => Promise<void>;
   clearOrder: (tableId: string) => void;
   mergeOrders: (primaryId: string, sourceIds: string[]) => void;
 };
@@ -82,6 +83,19 @@ export const useTableOrdersStore = create<TableOrdersState>((set, get) => ({
     const items = get().orders[tableId] ?? [];
     set((s) => ({ orderNotes: { ...s.orderNotes, [tableId]: note } }));
     scheduleUpsert(tableId, items, note);
+  },
+
+  // Upsert immédiat (sans debounce) — à appeler au moment de valider une commande
+  // pour s'assurer que les données sont dans Supabase avant que la Caisse encaisse.
+  flushOrder: async (tableId) => {
+    clearTimeout(upsertTimers[tableId]);
+    const items = get().orders[tableId] ?? [];
+    const note = get().orderNotes[tableId] ?? "";
+    const { error } = await supabase.from("table_orders").upsert(
+      { table_id: tableId, items, note, updated_at: new Date().toISOString() },
+      { onConflict: "table_id" },
+    );
+    if (error) console.error("[table_orders] flushOrder error:", error.message);
   },
 
   clearOrder: (tableId) => {

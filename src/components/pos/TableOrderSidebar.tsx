@@ -360,7 +360,7 @@ export function TableOrderSidebar({ tableId, tableNumber, mergedIds, onClose }: 
     ? mergedIds.map(id => tables.find(t => t.id === id)?.number).filter(Boolean).join(", ")
     : null;
 
-  const { orders, orderNotes, setOrder, setOrderNote, clearOrder } = useTableOrdersStore();
+  const { orders, orderNotes, setOrder, setOrderNote, flushOrder, clearOrder } = useTableOrdersStore();
 
   const [category, setCategory] = useState<Category>("Tous");
   const [query, setQuery] = useState("");
@@ -535,6 +535,10 @@ export function TableOrderSidebar({ tableId, tableNumber, mergedIds, onClose }: 
       console.error("Impossible de lancer l'impression cuisine", err);
     }
     // ------------------------------------------
+
+    // Flush immédiat vers Supabase — garantit que la Caisse verra les items
+    // dans table_orders AVANT d'ouvrir le modal d'encaissement.
+    await flushOrder(tableId);
 
     // Nettoyer le guard — le sidebar va se fermer
     _kitchenPrintedSet.delete(tableId);
