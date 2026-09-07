@@ -14,7 +14,8 @@ import { useTableOrdersStore } from "@/lib/tableOrdersStore";
 import { useSessionStore } from "@/lib/authStore";
 import { usePrinterStore } from "@/lib/printerStore";
 import { printerService } from "@/lib/printerService";
-import { cartSubtotal } from "@/lib/cart";
+import { supabase } from "@/lib/supabase";
+import { cartSubtotal, type CartItem } from "@/lib/cart";
 import { toast } from "sonner";
 import { UserLogin } from "@/components/auth/UserLogin";
 import { ComponentLoader } from "@/components/ui/PageLoader";
@@ -241,7 +242,7 @@ function MergedTableLines({ tables }: { tables: TableItem[] }) {
 // ── TablesPage ───────────────────────────────────────────────────────────────
 function TablesPage() {
   const { tables: tableData, loading: tablesLoading, updateTable, rooms, addRoom, addTable, mergeTablesDB } = useTableStore();
-  const { orders, orderNotes, clearOrder, mergeOrders } = useTableOrdersStore();
+  const { orders, orderNotes, clearOrder, mergeOrders, _patchOrder, _patchNote } = useTableOrdersStore();
   const currentUser = useSessionStore((s) => s.currentUser);
   const { printers } = usePrinterStore();
 
@@ -256,6 +257,50 @@ function TablesPage() {
   const [isMerging, setIsMerging] = useState(false);
   const [selectedTables, setSelectedTables] = useState<string[]>([]);
   const [isCreatingTakeaway, setIsCreatingTakeaway] = useState(false);
+
+  // ── Fetch table_orders depuis Supabase quand la caisse ouvre un modal d'encaissement
+  // Corrige le bug : la caisse ouvre CheckoutReceiptModal sans passer par TableOrderSidebar,
+  // donc le store Zustand peut ne pas avoir les items si le Realtime n'a pas livré l'event.
+  useEffect(() => {
+    if (!checkoutTable) return;
+    let mounted = true;
+
+    const fetchOrderForCheckout = async (retries = 3) => {
+      for (let i = 0; i < retries; i++) {
+        if (!mounted) return;
+        try {
+          const { data, error } = await supabase
+            .from("table_orders")
+            .select("items, note")
+            .eq("table_id", checkoutTable.id)
+            .maybeSingle();
+
+          if (error) {
+            console.error("[CASHIER CHECKOUT] Erreur SELECT table_orders:", error);
+            break;
+          }
+
+          if (data && data.items && (data.items as CartItem[]).length > 0) {
+            console.log("[CASHIER CHECKOUT] Items recupérés:", data.items);
+            if (mounted) {
+              _patchOrder(checkoutTable.id, data.items as CartItem[]);
+              _patchNote(checkoutTable.id, data.note || "");
+            }
+            break;
+          } else if (i < retries - 1) {
+            console.log(`[CASHIER CHECKOUT] Aucun item, retry ${i + 1}/${retries}...`);
+            await new Promise(r => setTimeout(r, 800));
+          }
+        } catch (err) {
+          console.error("[CASHIER CHECKOUT] Exception:", err);
+          break;
+        }
+      }
+    };
+
+    void fetchOrderForCheckout();
+    return () => { mounted = false; };
+  }, [checkoutTable, _patchOrder, _patchNote]);
 
   const emporterRoom = rooms.find(r => r.name.toLowerCase() === "emporter");
   const regularTables = tableData.filter(t => !emporterRoom || t.roomId !== emporterRoom.id);
