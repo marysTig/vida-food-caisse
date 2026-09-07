@@ -172,37 +172,116 @@ export const printerService = {
     if (!this.isNativePlatform() && !this.isConnected(printer.id)) return;
 
     const now = new Date();
-    const dateStr = now.toLocaleDateString("fr-FR");
+    const dateStr = now.toLocaleDateString("fr-FR", { day: "2-digit", month: "2-digit", year: "numeric" });
     const timeStr = now.toLocaleTimeString("fr-FR", { hour: '2-digit', minute: '2-digit' });
 
+    const LINE_WIDTH = 32;
+    const SEP = "-".repeat(LINE_WIDTH) + "\n";
+    const justify = (left: string, right: string, width = LINE_WIDTH) => {
+      const spaces = width - left.length - right.length;
+      return left + " ".repeat(Math.max(0, spaces)) + right;
+    };
+    const formatNumber = (num: number) => num.toString().replace(/\B(?=(\d{3})+(?!\d))/g, " ");
+
     let ticket = INIT;
+
+    // --- EN-TÊTE ---
     ticket += ALIGN_CENTER + DOUBLE_HEIGHT_WIDTH + BOLD_ON + "LA VIDA FOOD\n" + NORMAL_SIZE + BOLD_OFF;
-    ticket += "RECU DE PAIEMENT\n";
-    if (tableNumber) {
-      ticket += `Table / Commande : ${tableNumber}\n`;
-    }
-    ticket += `${dateStr} - ${timeStr}\n`;
-    ticket += "--------------------------------\n";
+    ticket += "GOOD FOOD . GOOD MOOD\n\n";
+    ticket += "Merci pour votre visite !\n";
+    ticket += "♥\n\n";
     
+    // --- INFOS RESTO ---
     ticket += ALIGN_LEFT;
+    ticket += " Cité 123, Alger | BURGERS\n";
+    ticket += " 0555 12 34 56   | PIZZAS\n";
+    ticket += " @lavidafood     | SANDWICHS\n";
+    ticket += "                 | & MORE\n";
+    
+    ticket += ALIGN_CENTER;
+    ticket += "\nFast Food with Love ♥\n";
+    ticket += ALIGN_LEFT;
+    ticket += SEP;
+
+    // --- METADATA COMMANDE ---
+    ticket += justify(`Date : ${dateStr}`, `Heure : ${timeStr}`) + "\n";
+    const orderNum = tableNumber ? `#${tableNumber}` : "#---";
+    ticket += justify(`N° Cmd : ${orderNum}`, `Caisse : 01`) + "\n";
+    const tableStr = tableNumber ? tableNumber.toString() : "---";
+    // Si nous n'avons pas accès direct au nom du serveur, on garde "---" ou une info générique
+    ticket += justify(`Table : ${tableStr}`, `Serveur: ---`) + "\n";
+    ticket += SEP;
+
+    // --- PRODUITS ---
+    const formatLine = (qte: string, prod: string, pu: string, tot: string) => {
+      const q = qte.padEnd(3);
+      const p = prod.padEnd(14).substring(0, 14);
+      const u = pu.padStart(6);
+      const t = tot.padStart(7);
+      return `${q} ${p} ${u} ${t}`;
+    };
+
+    ticket += BOLD_ON + formatLine("Qté", "Produit", "P.U", "Total") + "\n" + BOLD_OFF;
+    ticket += SEP;
+
     for (const item of items) {
       const lineTotalVal = lineTotal(item);
-      const name = item.product.name.substring(0, 20);
-      const qtyStr = `${item.quantity}x `.padEnd(4);
+      const unitPrice = lineTotalVal / item.quantity;
+      const puStr = formatNumber(unitPrice);
+      const totStr = formatNumber(lineTotalVal);
       
-      ticket += `${qtyStr}${name}\n`;
+      let name = item.product.name;
+      const MAX_PROD_LEN = 14;
+      
+      if (name.length > MAX_PROD_LEN) {
+        // Retour à la ligne intelligent pour les produits longs
+        const words = name.split(" ");
+        let currentLine = "";
+        const lines: string[] = [];
+        for (const word of words) {
+          if ((currentLine + word).length > MAX_PROD_LEN) {
+            lines.push(currentLine.trim());
+            currentLine = word + " ";
+          } else {
+            currentLine += word + " ";
+          }
+        }
+        if (currentLine) lines.push(currentLine.trim());
+        
+        ticket += formatLine(item.quantity.toString(), lines[0], puStr, totStr) + "\n";
+        for (let i = 1; i < lines.length; i++) {
+          ticket += formatLine("", lines[i], "", "") + "\n";
+        }
+      } else {
+        ticket += formatLine(item.quantity.toString(), name, puStr, totStr) + "\n";
+      }
+
       if (item.selectedOption) {
         ticket += `    (${item.selectedOption.label})\n`;
       }
       for (const sup of item.supplements) {
         ticket += `    + ${sup.label}\n`;
       }
-      ticket += `    ${formatDA(lineTotalVal)}\n`;
     }
 
-    ticket += "--------------------------------\n";
-    ticket += ALIGN_CENTER + BOLD_ON + `TOTAL : ${formatDA(total)}\n` + BOLD_OFF;
-    ticket += "\nMerci de votre visite !\n\n\n\n";
+    ticket += SEP;
+
+    // --- TOTAUX ---
+    ticket += justify("Sous-total :", `${formatNumber(total)} DA`) + "\n";
+    ticket += justify("Remise :", `0 DA`) + "\n";
+    
+    // Le double width réduit la largeur max à 16 caractères pour 32 standards
+    const totalStr = `${formatNumber(total)} DA`;
+    const spaceForTotal = 16 - "TOTAL :".length - totalStr.length;
+    ticket += BOLD_ON + DOUBLE_HEIGHT_WIDTH + "TOTAL :" + " ".repeat(Math.max(0, spaceForTotal)) + totalStr + "\n" + NORMAL_SIZE + BOLD_OFF;
+    ticket += SEP;
+
+    // --- PIED DE PAGE ---
+    ticket += ALIGN_CENTER;
+    ticket += "         Merci !\n";
+    ticket += "A BIENTOT CHEZ\n";
+    ticket += "LA VIDA FOOD\n";
+    ticket += "♥\n\n\n\n";
     ticket += CUT_PAPER;
 
     await this.sendData(printer, this.encodeText(ticket));
