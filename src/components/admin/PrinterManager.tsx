@@ -208,7 +208,7 @@ export function PrinterManager() {
   };
 
   return (
-    <div className="flex h-full flex-col p-4 sm:p-6 lg:p-8">
+    <div className="flex h-full flex-col overflow-y-auto p-4 sm:p-6 lg:p-8">
       <div className="mb-6 flex items-center justify-between">
         <div>
           <h2 className="text-xl font-bold text-foreground">Gestion des Imprimantes</h2>
