@@ -515,6 +515,13 @@ export function TableOrderSidebar({ tableId, tableNumber, mergedIds, onClose }: 
     console.log("[SERVER ORDER] Order ID: (Items have individual IDs)");
     console.log("[SERVER ORDER] Items:", items);
     console.log("[SERVER ORDER] Commander clicked");
+    
+    // Flush immédiat vers Supabase — garantit que la Caisse verra les items
+    // dans table_orders AVANT de recevoir le statut "occupee" et d'ouvrir le modal.
+    console.log("[SERVER ORDER] Saving table_orders");
+    await flushOrder(tableId);
+    console.log("[SERVER ORDER] table_orders saved");
+
     const total = cartSubtotal(items);
     const now = new Date().toISOString();
     await updateTable(tableId, {
@@ -589,12 +596,6 @@ export function TableOrderSidebar({ tableId, tableNumber, mergedIds, onClose }: 
       console.error("Impossible de lancer l'impression cuisine", err);
     }
     // ------------------------------------------
-
-    // Flush immédiat vers Supabase — garantit que la Caisse verra les items
-    // dans table_orders AVANT d'ouvrir le modal d'encaissement.
-    console.log("[SERVER ORDER] Saving table_orders");
-    await flushOrder(tableId);
-    console.log("[SERVER ORDER] table_orders saved");
 
     // Nettoyer le guard — le sidebar va se fermer
     _kitchenPrintedSet.delete(tableId);

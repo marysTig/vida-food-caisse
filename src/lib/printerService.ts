@@ -216,10 +216,10 @@ export const printerService = {
       const p = prod.padEnd(14).substring(0, 14);
       const u = pu.padStart(6);
       const t = tot.padStart(7);
-      return `${q} ${p} ${u} ${t}`;
+      return justify("", `${q} ${p} ${u} ${t}`, LINE_WIDTH);
     };
 
-    ticket += BOLD_ON + formatLine("Qté", "Produit", "P.U", "Total") + "\n" + BOLD_OFF;
+    ticket += ALIGN_CENTER + BOLD_ON + justify("", "Qté Produit        P.U  Total ", LINE_WIDTH) + "\n" + BOLD_OFF;
     ticket += SEP;
 
     for (const item of items) {
@@ -265,12 +265,8 @@ export const printerService = {
     ticket += SEP;
 
     // --- TOTAUX ---
-    ticket += justify("Sous-total :", `${formatNumber(total)} DA`) + "\n";
-    
-    // Le double width réduit la largeur max à 16 caractères pour 32 standards
-    const totalStr = `${formatNumber(total)} DA`;
-    const spaceForTotal = 16 - "TOTAL :".length - totalStr.length;
-    ticket += BOLD_ON + DOUBLE_HEIGHT_WIDTH + "TOTAL :" + " ".repeat(Math.max(0, spaceForTotal)) + totalStr + "\n" + NORMAL_SIZE + BOLD_OFF;
+    ticket += ALIGN_CENTER + BOLD_ON + justify("Sous-total :", `${formatNumber(total)} DA`) + "\n" + BOLD_OFF;
+    ticket += BOLD_ON + DOUBLE_HEIGHT_WIDTH + justify("TOTAL :", `${formatNumber(total)} DA`) + "\n" + NORMAL_SIZE + BOLD_OFF;
     ticket += SEP;
 
     // --- PIED DE PAGE ---
