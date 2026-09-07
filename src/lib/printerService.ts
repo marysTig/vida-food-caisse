@@ -193,23 +193,21 @@ export const printerService = {
     
     // --- INFOS RESTO ---
     ticket += ALIGN_LEFT;
-    ticket += " Cité 123, Alger | BURGERS\n";
-    ticket += " 0555 12 34 56   | PIZZAS\n";
-    ticket += " @lavidafood     | SANDWICHS\n";
-    ticket += "                 | & MORE\n";
+    ticket += " Seddouk, Bejaia\n";
+    ticket += " 0778 46 69 14\n";
+    ticket += " @lavidafood\n";
     
     ticket += ALIGN_CENTER;
-    ticket += "\nFast Food with Love ♥\n";
+    ticket += "\nFast Food with Love \u2665\n";
     ticket += ALIGN_LEFT;
     ticket += SEP;
 
     // --- METADATA COMMANDE ---
     ticket += justify(`Date : ${dateStr}`, `Heure : ${timeStr}`) + "\n";
     const orderNum = tableNumber ? `#${tableNumber}` : "#---";
-    ticket += justify(`N° Cmd : ${orderNum}`, `Caisse : 01`) + "\n";
+    ticket += justify(`N\u00b0 Cmd : ${orderNum}`, `Caisse : 01`) + "\n";
     const tableStr = tableNumber ? tableNumber.toString() : "---";
-    // Si nous n'avons pas accès direct au nom du serveur, on garde "---" ou une info générique
-    ticket += justify(`Table : ${tableStr}`, `Serveur: ---`) + "\n";
+    ticket += `Table : ${tableStr}\n`;
     ticket += SEP;
 
     // --- PRODUITS ---
@@ -268,7 +266,6 @@ export const printerService = {
 
     // --- TOTAUX ---
     ticket += justify("Sous-total :", `${formatNumber(total)} DA`) + "\n";
-    ticket += justify("Remise :", `0 DA`) + "\n";
     
     // Le double width réduit la largeur max à 16 caractères pour 32 standards
     const totalStr = `${formatNumber(total)} DA`;
