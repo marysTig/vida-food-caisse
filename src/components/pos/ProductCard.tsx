@@ -47,7 +47,7 @@ export function ProductCard({ product, onSelect, readOnly = false }: ProductCard
           <div className="flex flex-wrap justify-center gap-1 mt-0.5">
             {product.options.map((opt) => (
               <span key={opt.label} className="rounded-md bg-secondary/60 px-1.5 py-0.5 text-[10px] font-medium text-secondary-foreground">
-                {opt.label} â€” {formatDA(opt.price)}
+                {opt.label} — {formatDA(opt.price)}
               </span>
             ))}
           </div>
@@ -55,7 +55,7 @@ export function ProductCard({ product, onSelect, readOnly = false }: ProductCard
         <div className="mt-auto flex w-full flex-col items-center justify-center pt-2 gap-2">
           <p className="text-base font-bold text-primary">
             {product.options && product.options.length > 0
-              ? `DÃ¨s ${formatDA(Math.min(...product.options.map(o => o.price)))}`
+              ? `Dès ${formatDA(Math.min(...product.options.map(o => o.price)))}`
               : formatDA(product.price)}
           </p>
           {/* Bouton + toujours visible sur mobile, visible au hover sur desktop */}
