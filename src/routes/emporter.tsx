@@ -14,6 +14,8 @@ import { usePrinterStore } from "@/lib/printerStore";
 import { printerService } from "@/lib/printerService";
 import { cartSubtotal } from "@/lib/cart";
 import { toast } from "sonner";
+import { KitchenPrintHub } from "@/components/pos/KitchenPrintHub";
+import { useSessionStore } from "@/lib/authStore";
 
 export const Route = createFileRoute("/emporter")({
   head: () => ({
@@ -26,6 +28,7 @@ function EmporterPage() {
   const { tables: tableData, loading, updateTable, rooms } = useTableStore();
   const { orders, orderNotes, clearOrder } = useTableOrdersStore();
   const { printers } = usePrinterStore();
+  const currentUser = useSessionStore(s => s.currentUser);
 
   const [activeTable, setActiveTable] = useState<{ id: string; number: number } | null>(null);
   const [checkoutTable, setCheckoutTable] = useState<{ id: string; number: number } | null>(null);
@@ -174,6 +177,8 @@ function EmporterPage() {
         onClose={() => setCheckoutTable(null)}
         onConfirm={handleQuickCheckout}
       />
+      {/* Hub d'impression : Actif uniquement sur la caisse */}
+      {currentUser?.role !== 'serveur' && <KitchenPrintHub />}
     </div>
   );
 }

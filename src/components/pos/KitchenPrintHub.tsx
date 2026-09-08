@@ -42,26 +42,28 @@ export function KitchenPrintHub() {
       const kitchenPrinters = printers.filter(p => p.enabled && (p.type === "plaque" || p.type === "four"));
       console.log(`[PRINT HUB] Loading printers: ${kitchenPrinters.length} active kitchen printers`);
       
-      for (const printer of kitchenPrinters) {
-        // Filtrage des catégories
-        const hasMatchingItems = data.items.some(item => printer.categories.includes(item.product.category));
-        
-        console.log(`[PRINT HUB] Printer category match for ${printer.name}: ${hasMatchingItems}`);
-        
-        if (hasMatchingItems) {
-          console.log(`[PRINT HUB] Sending to printer ${printer.name}...`);
-          printerService.printKitchen(printer, data.items, data.tableNumber, data.orderNote)
-            .then(() => {
+      // Execute sequentially to prevent Bluetooth connection conflicts
+      (async () => {
+        for (const printer of kitchenPrinters) {
+          // Filtrage des catégories
+          const hasMatchingItems = data.items.some(item => printer.categories.includes(item.product.category));
+          
+          console.log(`[PRINT HUB] Printer category match for ${printer.name}: ${hasMatchingItems}`);
+          
+          if (hasMatchingItems) {
+            console.log(`[PRINT HUB] Sending to printer ${printer.name}...`);
+            try {
+              await printerService.printKitchen(printer, data.items, data.tableNumber, data.orderNote);
               console.log(`[PRINT HUB] Print success for ${printer.name}`);
-            })
-            .catch(err => {
+            } catch (err: any) {
               console.error(`[PRINT HUB] Print error on ${printer.name}:`, err);
               toast.error(`Erreur d'impression Hub (${printer.name})`, { 
                 description: `Table ${data.tableNumber} : ${err.message}` 
               });
-            });
+            }
+          }
         }
-      }
+      })();
     }).subscribe((status) => {
       if (status === "SUBSCRIBED") {
         console.log("[PRINT HUB] Successfully subscribed to broadcast channel");

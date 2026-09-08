@@ -575,18 +575,19 @@ export function TableOrderSidebar({ tableId, tableNumber, mergedIds, onClose }: 
           // La Caisse imprime directement sans passer par le Hub
           const kitchenPrinters = printers.filter(p => p.enabled && (p.type === "plaque" || p.type === "four"));
           console.log(`[CAISSE PRINT] Active printers:`, kitchenPrinters);
-          for (const printer of kitchenPrinters) {
-            console.log(`[CAISSE PRINT] Printing to ${printer.name}`);
-            // Asynchrone — une erreur Bluetooth ne bloque jamais la commande
-            printerService.printKitchen(printer, items, tableNumber, orderNote)
-              .then(() => {
+          
+          (async () => {
+            for (const printer of kitchenPrinters) {
+              console.log(`[CAISSE PRINT] Printing to ${printer.name}`);
+              try {
+                await printerService.printKitchen(printer, items, tableNumber, orderNote);
                 console.log(`[CAISSE PRINT] Print success for ${printer.name}`);
-              })
-              .catch(err => {
+              } catch (err: any) {
                 console.error(`[Cuisine] Erreur impression ${printer.name}:`, err);
                 toast.error(`Erreur d'impression cuisine (${printer.name})`, { description: err.message });
-              });
-          }
+              }
+            }
+          })();
           console.log(`[Cuisine] Impression directe lancée pour table ${tableId} (${kitchenPrinters.length} imprimante(s)).`);
         }
       } else {

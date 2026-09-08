@@ -39,14 +39,32 @@ async function fetchPrintersFromDB(): Promise<Printer[]> {
   }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  return (data ?? []).map((row: any) => ({
-    id: row["id"] as string,
-    name: row["name"] as string,
-    type: row["type"] as PrinterType,
-    mac_address: (row["mac_address"] as string | null) ?? null,
-    enabled: (row["enabled"] as boolean) ?? true,
-    categories: (row["categories"] as string[]) ?? [],
-  }));
+  return (data ?? []).map((row: any) => {
+    let parsedCategories: string[] = [];
+    if (Array.isArray(row["categories"])) {
+      parsedCategories = row["categories"];
+    } else if (typeof row["categories"] === "string") {
+      try {
+        parsedCategories = JSON.parse(row["categories"]);
+      } catch (e) {
+        parsedCategories = row["categories"]
+          .replace(/^{/, "")
+          .replace(/}$/, "")
+          .split(",")
+          .map((s: string) => s.trim().replace(/^"/, "").replace(/"$/, ""))
+          .filter(Boolean);
+      }
+    }
+
+    return {
+      id: row["id"] as string,
+      name: row["name"] as string,
+      type: row["type"] as PrinterType,
+      mac_address: (row["mac_address"] as string | null) ?? null,
+      enabled: (row["enabled"] as boolean) ?? true,
+      categories: parsedCategories,
+    };
+  });
 }
 
 let _printerInitialized = false;
