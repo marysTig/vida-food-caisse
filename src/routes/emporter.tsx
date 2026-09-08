@@ -138,12 +138,14 @@ function EmporterPage() {
                   )}
 
                   <div className="mt-auto flex flex-wrap gap-2 pt-1" onClick={(e) => e.stopPropagation()}>
-                    <button
-                      onClick={() => setCheckoutTable({ id: table.id, number: table.number })}
-                      className="flex-1 rounded-lg bg-emerald-600 py-2 text-xs font-semibold text-white hover:bg-emerald-700 active:scale-95"
-                    >
-                      Encaisser
-                    </button>
+                    {currentUser?.role !== 'serveur' && (
+                      <button
+                        onClick={() => setCheckoutTable({ id: table.id, number: table.number })}
+                        className="flex-1 rounded-lg bg-emerald-600 py-2 text-xs font-semibold text-white hover:bg-emerald-700 active:scale-95"
+                      >
+                        Encaisser
+                      </button>
+                    )}
                     <button
                       onClick={() => handleStatusChange(table.id, "libre")}
                       className="rounded-lg border border-border bg-background px-3 py-2 text-xs font-semibold text-muted-foreground hover:text-destructive active:scale-95"

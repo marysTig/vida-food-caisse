@@ -16,11 +16,11 @@ export function CategoryTabs({ active, onChange, categories }: CategoryTabsProps
           onClick={() => onChange(category)}
           className={
             category === active
-              ? "h-20 w-20 shrink-0 rounded-full bg-primary flex items-center justify-center p-2 text-xs text-center font-semibold text-primary-foreground shadow-md transition-transform active:scale-95"
-              : "h-20 w-20 shrink-0 rounded-full border border-border bg-card flex items-center justify-center p-2 text-xs text-center font-medium text-muted-foreground shadow-sm transition-all hover:border-primary hover:text-foreground active:scale-95"
+              ? "flex h-[84px] w-[84px] shrink-0 flex-col items-center justify-center rounded-full bg-primary p-2 text-center text-[11px] font-bold text-primary-foreground shadow-md transition-transform active:scale-95"
+              : "flex h-[84px] w-[84px] shrink-0 flex-col items-center justify-center rounded-full border border-border bg-card p-2 text-center text-[11px] font-semibold text-muted-foreground shadow-sm transition-all hover:border-primary hover:text-foreground active:scale-95"
           }
         >
-          <span className="line-clamp-2 leading-tight">{category}</span>
+          <span className="line-clamp-2 leading-tight break-words px-1">{category}</span>
         </button>
       ))}
     </div>
