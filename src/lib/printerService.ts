@@ -24,6 +24,9 @@ const CUT_PAPER = GS + "V" + "\x41" + "\x03"; // Full cut with feed
 // Le service gère un registre d'appareils connectés en mémoire (pour Web Bluetooth)
 const webConnectedDevices = new Map<string, BluetoothRemoteGATTCharacteristic>();
 
+// Verrou global pour éviter de crasher le daemon Bluetooth Android
+let isBluetoothBusy = false;
+
 export const printerService = {
   isNativePlatform(): boolean {
     return typeof window !== "undefined" && !!window.bluetoothSerial;
@@ -51,12 +54,17 @@ export const printerService = {
       // Ici on fait juste un ping pour tester.
       if (!printer.mac_address) throw new Error("Adresse MAC manquante. Veuillez d'abord l'associer.");
       return new Promise((resolve, reject) => {
-        window.bluetoothSerial.connect(printer.mac_address, 
+        window.bluetoothSerial.isEnabled(
           () => {
-            window.bluetoothSerial.disconnect();
-            resolve();
-          }, 
-          (err: any) => reject(new Error("Impossible de se connecter: " + err))
+            window.bluetoothSerial.connect(printer.mac_address, 
+              () => {
+                window.bluetoothSerial.disconnect();
+                resolve();
+              }, 
+              (err: any) => reject(new Error("Impossible de se connecter: " + err))
+            );
+          },
+          () => reject(new Error("Le Bluetooth est désactivé sur cet appareil."))
         );
       });
     }
@@ -110,21 +118,70 @@ export const printerService = {
   async sendData(printer: Printer, data: Uint8Array): Promise<void> {
     if (this.isNativePlatform()) {
       if (!printer.mac_address) throw new Error("Adresse MAC non configurée pour " + printer.name);
+      
+      // Attendre si le Bluetooth est déjà en cours d'utilisation
+      let waitTime = 0;
+      while (isBluetoothBusy && waitTime < 10000) {
+        await new Promise(r => setTimeout(r, 500));
+        waitTime += 500;
+      }
+      
+      isBluetoothBusy = true;
+      
       return new Promise((resolve, reject) => {
-        window.bluetoothSerial.connect(printer.mac_address, () => {
-          // Sur cordova-plugin-bluetooth-serial on passe simplement un ArrayBuffer
-          window.bluetoothSerial.write(data.buffer, () => {
-            // Petit délai pour laisser le buffer s'imprimer avant de couper
-            setTimeout(() => {
-              window.bluetoothSerial.disconnect(() => resolve(), (e: any) => reject(new Error(e)));
-            }, 1000);
+        let isDone = false;
+        
+        // Timeout de sécurité au cas où le plugin Bluetooth plante silencieusement
+        const timeoutId = setTimeout(() => {
+          if (!isDone) {
+            isDone = true;
+            isBluetoothBusy = false;
+            try { window.bluetoothSerial.disconnect(); } catch(e) {}
+            reject(new Error(`Délai d'attente dépassé pour ${printer.name}. L'imprimante est-elle allumée ?`));
+          }
+        }, 8000);
+        
+        const cleanup = () => {
+          if (!isDone) {
+            isDone = true;
+            clearTimeout(timeoutId);
+            isBluetoothBusy = false;
+          }
+        };
+
+        const doConnect = () => {
+          window.bluetoothSerial.connect(printer.mac_address, () => {
+            if (isDone) return;
+            
+            window.bluetoothSerial.write(data.buffer, () => {
+              if (isDone) return;
+              
+              // Petit délai pour laisser le buffer s'imprimer
+              setTimeout(() => {
+                if (isDone) return;
+                window.bluetoothSerial.disconnect(
+                  () => { cleanup(); resolve(); },
+                  (e: any) => { cleanup(); reject(new Error(e)); }
+                );
+              }, 1000);
+            }, (err: any) => {
+              window.bluetoothSerial.disconnect();
+              cleanup();
+              reject(new Error("Erreur écriture: " + err));
+            });
           }, (err: any) => {
-            window.bluetoothSerial.disconnect();
-            reject(new Error("Erreur écriture: " + err));
+            cleanup();
+            reject(new Error("Connexion impossible (Vérifiez l'imprimante): " + err));
           });
-        }, (err: any) => {
-          reject(new Error("Erreur connexion Bluetooth (Assurez-vous que l'imprimante est allumée et appairée): " + err));
-        });
+        };
+
+        window.bluetoothSerial.isEnabled(
+          () => doConnect(),
+          () => {
+            cleanup();
+            reject(new Error("Le Bluetooth est désactivé sur la tablette !"));
+          }
+        );
       });
     }
 
