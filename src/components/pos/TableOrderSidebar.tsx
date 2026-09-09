@@ -552,7 +552,8 @@ export function TableOrderSidebar({ tableId, tableNumber, mergedIds, onClose }: 
       if (!_kitchenPrintedSet.has(tableId)) {
         _kitchenPrintedSet.add(tableId);
         
-        const printId = crypto.randomUUID();
+        // Utilisation de Math.random() au lieu de crypto.randomUUID() qui n'est pas dispo en HTTP local
+        const printId = Date.now().toString(36) + Math.random().toString(36).substring(2);
         
         if (isServeur) {
           // OPTION B : HUB D'IMPRESSION
@@ -575,6 +576,10 @@ export function TableOrderSidebar({ tableId, tableNumber, mergedIds, onClose }: 
           // La Caisse imprime directement sans passer par le Hub
           const kitchenPrinters = printers.filter(p => p.enabled && (p.type === "plaque" || p.type === "four"));
           console.log(`[CAISSE PRINT] Active printers:`, kitchenPrinters);
+          
+          if (kitchenPrinters.length === 0) {
+            toast.warning("Aucune imprimante cuisine configurée ou activée.");
+          }
           
           (async () => {
             for (const printer of kitchenPrinters) {
@@ -635,6 +640,7 @@ export function TableOrderSidebar({ tableId, tableNumber, mergedIds, onClose }: 
       const cashierPrinters = printers.filter(p => p.enabled && p.type === "caisse");
       if (cashierPrinters.length === 0) {
         console.warn("Aucune imprimante de caisse trouvée.");
+        toast.warning("Aucune imprimante de caisse configurée.");
       }
       for (const printer of cashierPrinters) {
         printerService.printReceipt(printer, itemsToPrint, totalToPrint, tableNumber).catch(err => {

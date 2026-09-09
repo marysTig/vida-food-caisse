@@ -169,7 +169,9 @@ export const printerService = {
   },
 
   async printReceipt(printer: Printer, items: CartItem[], total: number, tableNumber?: string | number): Promise<void> {
-    if (!this.isNativePlatform() && !this.isConnected(printer.id)) return;
+    if (!this.isNativePlatform() && !this.isConnected(printer.id)) {
+      throw new Error("L'imprimante n'est pas connectée. Veuillez la reconnecter (Web Bluetooth).");
+    }
 
     const now = new Date();
     const dateStr = now.toLocaleDateString("fr-FR", { day: "2-digit", month: "2-digit", year: "numeric" });
@@ -281,7 +283,9 @@ export const printerService = {
   },
 
   async printKitchen(printer: Printer, items: CartItem[], orderNumber: string | number, orderNote?: string): Promise<void> {
-    if (!this.isNativePlatform() && !this.isConnected(printer.id)) return;
+    if (!this.isNativePlatform() && !this.isConnected(printer.id)) {
+      throw new Error("L'imprimante n'est pas connectée. Veuillez la reconnecter (Web Bluetooth).");
+    }
 
     const categories = printer.categories || [];
     const filteredItems = items.filter(item => categories.includes(item.product.category));

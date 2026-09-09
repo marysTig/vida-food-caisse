@@ -62,6 +62,10 @@ function EmporterPage() {
     // --- IMPRESSION CAISSE ---
     try {
       const cashierPrinters = printers.filter(p => p.enabled && p.type === "caisse");
+      if (cashierPrinters.length === 0) {
+        console.warn("Aucune imprimante de caisse trouvée.");
+        toast.warning("Aucune imprimante de caisse configurée.");
+      }
       for (const printer of cashierPrinters) {
         printerService.printReceipt(printer, itemsToPrint, cartSubtotal(itemsToPrint), `Emporter #${checkoutTable.number}`).catch(err => {
           console.error("Erreur d'impression caisse:", err);
