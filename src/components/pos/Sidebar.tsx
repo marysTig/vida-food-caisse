@@ -2,7 +2,6 @@ import {
   ChefHat,
   LogOut,
   Armchair,
-  BarChart3,
   Utensils,
   ShoppingBag,
 } from "lucide-react";
@@ -13,7 +12,6 @@ import { useSessionStore } from "@/lib/authStore";
 const nav = [
   { label: "Tables",   icon: Armchair,    to: "/tables" },
   { label: "Emporter", icon: ShoppingBag, to: "/emporter" },
-  { label: "Rapport",  icon: BarChart3,   to: "/rapports" },
 ];
 
 type SidebarProps = {
@@ -36,8 +34,7 @@ export function Sidebar(_props: SidebarProps) {
   const emporterRoom = rooms.find(r => r.name.toLowerCase() === "emporter");
   const activeEmporterCount = emporterRoom ? tables.filter(t => t.roomId === emporterRoom.id && t.status !== "libre").length : 0;
 
-  // Filter out Rapport for serveur
-  const filteredNav = role === "serveur" ? nav.filter(item => item.label !== "Rapport") : nav;
+  const filteredNav = nav;
 
   return (
     <aside className="hidden md:flex md:w-[72px] lg:w-[220px] shrink-0 flex-col bg-sidebar text-sidebar-foreground border-r border-sidebar-border transition-all duration-200">

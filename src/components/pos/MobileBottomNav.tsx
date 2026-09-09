@@ -1,4 +1,4 @@
-import { Armchair, BarChart3, Utensils, ShoppingBag, LogOut } from "lucide-react";
+import { Armchair, Utensils, ShoppingBag, LogOut } from "lucide-react";
 import { Link, useRouterState } from "@tanstack/react-router";
 import { useTableStore } from "@/lib/tableStore";
 import { useSessionStore } from "@/lib/authStore";
@@ -6,7 +6,6 @@ import { useSessionStore } from "@/lib/authStore";
 const nav = [
   { label: "Tables",   icon: Armchair,    to: "/tables" },
   { label: "Emporter", icon: ShoppingBag, to: "/emporter" },
-  { label: "Rapport",  icon: BarChart3,   to: "/rapports" },
 ];
 
 type MobileBottomNavProps = {
@@ -23,8 +22,7 @@ export function MobileBottomNav(_props: MobileBottomNavProps) {
   const emporterRoom = rooms.find(r => r.name.toLowerCase() === "emporter");
   const activeEmporterCount = emporterRoom ? tables.filter(t => t.roomId === emporterRoom.id && t.status !== "libre").length : 0;
 
-  // Filter out Rapport for serveur
-  const filteredNav = role === "serveur" ? nav.filter(item => item.label !== "Rapport") : nav;
+  const filteredNav = nav;
 
   return (
     <nav className="fixed bottom-0 left-0 right-0 z-30 flex items-center justify-around border-t border-border bg-sidebar px-2 pb-safe pt-2 md:hidden">
