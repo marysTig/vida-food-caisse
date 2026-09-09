@@ -1,5 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { ShoppingBag, Clock, Ban } from "lucide-react";
 import { Sidebar } from "@/components/pos/Sidebar";
 import { MobileBottomNav } from "@/components/pos/MobileBottomNav";
@@ -9,10 +9,11 @@ import { formatElapsed } from "@/data/tables";
 import { formatDA } from "@/data/menu";
 import { useTableStore } from "@/lib/tableStore";
 import { useTableOrdersStore } from "@/lib/tableOrdersStore";
+import { supabase } from "@/lib/supabase";
 import { ComponentLoader } from "@/components/ui/PageLoader";
 import { usePrinterStore } from "@/lib/printerStore";
 import { printerService } from "@/lib/printerService";
-import { cartSubtotal } from "@/lib/cart";
+import { cartSubtotal, type CartItem } from "@/lib/cart";
 import { toast } from "sonner";
 import { KitchenPrintHub } from "@/components/pos/KitchenPrintHub";
 import { useSessionStore } from "@/lib/authStore";
@@ -26,7 +27,7 @@ export const Route = createFileRoute("/emporter")({
 
 function EmporterPage() {
   const { tables: tableData, loading, updateTable, rooms } = useTableStore();
-  const { orders, orderNotes, clearOrder } = useTableOrdersStore();
+  const { orders, orderNotes, clearOrder, _patchOrder, _patchNote } = useTableOrdersStore();
   const { printers } = usePrinterStore();
   const currentUser = useSessionStore(s => s.currentUser);
 
@@ -37,6 +38,49 @@ function EmporterPage() {
   const emporterTables = emporterRoom 
     ? tableData.filter(t => t.roomId === emporterRoom.id && t.status !== "libre") 
     : [];
+
+  // ── Fetch depuis Supabase si le store Zustand est vide au moment d'encaisser ─
+  // Corrige le bug : race condition Realtime entre Serveur (flushOrder) et Caisse (checkout)
+  useEffect(() => {
+    if (!checkoutTable) return;
+    let mounted = true;
+
+    const fetchOrderForCheckout = async (retries = 3) => {
+      for (let i = 0; i < retries; i++) {
+        if (!mounted) return;
+        try {
+          const { data, error } = await supabase
+            .from("table_orders")
+            .select("items, note")
+            .eq("table_id", checkoutTable.id)
+            .maybeSingle();
+
+          if (error) {
+            console.error("[EMPORTER CHECKOUT] Erreur SELECT table_orders:", error);
+            break;
+          }
+
+          if (data && data.items && (data.items as CartItem[]).length > 0) {
+            console.log("[EMPORTER CHECKOUT] Items récupérés depuis Supabase:", data.items);
+            if (mounted) {
+              _patchOrder(checkoutTable.id, data.items as CartItem[]);
+              _patchNote(checkoutTable.id, data.note || "");
+            }
+            break;
+          } else if (i < retries - 1) {
+            console.log(`[EMPORTER CHECKOUT] Aucun item, retry ${i + 1}/${retries}...`);
+            await new Promise(r => setTimeout(r, 800));
+          }
+        } catch (err) {
+          console.error("[EMPORTER CHECKOUT] Exception:", err);
+          break;
+        }
+      }
+    };
+
+    void fetchOrderForCheckout();
+    return () => { mounted = false; };
+  }, [checkoutTable, _patchOrder, _patchNote]);
 
   const handleStatusChange = async (id: string, status: "libre") => {
     await updateTable(id, {
