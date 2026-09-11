@@ -111,7 +111,7 @@ function EmporterPage() {
         toast.warning("Aucune imprimante de caisse configurée.");
       }
       for (const printer of cashierPrinters) {
-        printerService.printReceipt(printer, itemsToPrint, cartSubtotal(itemsToPrint), `Emporter #${checkoutTable.number}`).catch(err => {
+        printerService.printReceipt(printer, itemsToPrint, cartSubtotal(itemsToPrint), `À EMPORTER — Commande #${checkoutTable.number}`).catch(err => {
           console.error("Erreur d'impression caisse:", err);
           toast.error("Erreur d'impression caisse", { description: err.message });
         });
@@ -221,7 +221,7 @@ function EmporterPage() {
 
       <CheckoutReceiptModal
         open={checkoutTable !== null}
-        tableNumber={`Emporter #${checkoutTable?.number}`}
+        tableNumber={`À EMPORTER — Commande #${checkoutTable?.number}`}
         items={checkoutItems}
         {...(checkoutNote ? { orderNote: checkoutNote } : {})}
         onClose={() => setCheckoutTable(null)}

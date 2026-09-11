@@ -1,7 +1,7 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useState, useEffect, useCallback } from "react";
 import {
-  Armchair, Users, Clock, Ban, MapPin, ShoppingBag, Merge, Check, X
+  Armchair, Clock, Ban, ShoppingBag, Merge, Check, X
 } from "lucide-react";
 import { Sidebar } from "@/components/pos/Sidebar";
 import { MobileBottomNav } from "@/components/pos/MobileBottomNav";
@@ -44,10 +44,9 @@ const filters: { label: string; value: TableStatus | "toutes" }[] = [
 
 // ─── TableCard ────────────────────────────────────────────────────────────────
 function TableCard({
-  table, roomName, isActive, onStatusChange, onSelect, onEncaisser, isMergingMode, isSelectedForMerge, mergedWithNumbers, isServeur
+  table, isActive, onStatusChange, onSelect, onEncaisser, isMergingMode, isSelectedForMerge, mergedWithNumbers, isServeur
 }: {
   table: TableItem;
-  roomName?: string | undefined;
   isActive: boolean;
   onStatusChange: (id: string, status: TableStatus) => void;
   onSelect: (id: string, number: number) => void;
@@ -92,19 +91,6 @@ function TableCard({
         </span>
       </div>
 
-      {/* Room + seats */}
-      <div className="flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
-        {roomName && (
-          <div className="flex items-center gap-1.5">
-            <MapPin className="h-3.5 w-3.5" />
-            <span className="truncate font-medium">{roomName}</span>
-          </div>
-        )}
-        <div className="flex items-center gap-1.5">
-          <Users className="h-3.5 w-3.5" />
-          <span>{table.seats} places</span>
-        </div>
-      </div>
 
       {/* Occupied info */}
       {table.status === "occupee" && table.occupiedSince && (
@@ -537,11 +523,13 @@ function TablesPage() {
     });
     checkoutItems = combinedItems;
     checkoutNote = notes.length > 0 ? notes.join(" | ") : undefined;
-    checkoutTableNumber = tableData
+    const numbers = tableData
       .filter(t => multiCheckoutTables.includes(t.id))
       .map(t => t.number)
       .join(", ");
+    checkoutTableNumber = `Tables ${numbers}`;
   }
+
 
   // Show login screen if no user is authenticated
   if (!currentUser) {
@@ -643,8 +631,6 @@ function TablesPage() {
           ) : (
             <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
               {visible.map(table => {
-                const roomName = rooms.find((r) => r.id === table.roomId)?.name;
-                
                 let mergedWithNumbers: string | undefined;
                 if (table.parentTableId) {
                   const parent = tableData.find(t => t.id === table.parentTableId);
@@ -660,7 +646,6 @@ function TablesPage() {
                   <TableCard
                     key={table.id}
                     table={table}
-                    roomName={roomName}
                     isActive={activeTable?.id === table.id}
                     onStatusChange={handleStatusChange}
                     onSelect={handleSelectTable}
@@ -674,6 +659,7 @@ function TablesPage() {
               })}
             </div>
           )}
+
         </main>
         
         {/* Barre de commande de sélection multiple */}

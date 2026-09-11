@@ -12,9 +12,9 @@ export type RoomItem = {
 export type TableItem = {
   id: string;
   number: number;
-  seats: number;
+  seats?: number;
   status: TableStatus;
-  roomId: string;
+  roomId?: string;
   orderTotal?: number;
   occupiedSince?: string;
   parentTableId?: string | null;
@@ -229,12 +229,14 @@ export function useTableStore() {
   // ── CRUD Tables ─────────────────────────────────────────────────
 
   const addTable = async (table: Omit<TableItem, "id">) => {
-    const { data, error } = await supabase.from("tables").insert({
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const insertPayload: Record<string, any> = {
       number: table.number,
-      seats: table.seats,
       status: table.status,
-      room_id: table.roomId,
-    }).select().single();
+    };
+    if (table.seats !== undefined) insertPayload["seats"] = table.seats;
+    if (table.roomId) insertPayload["room_id"] = table.roomId;
+    const { data, error } = await supabase.from("tables").insert(insertPayload).select().single();
     if (error) throw new Error(error.message);
     await reload();
     return data.id as string;

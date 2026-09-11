@@ -94,7 +94,9 @@ export function CheckoutReceiptModal({
             </div>
             <div>
               <p className="text-base font-bold text-foreground">Récapitulatif</p>
-              <p className="text-xs text-muted-foreground">Table {tableNumber}</p>
+              <p className="text-xs text-muted-foreground">
+                {typeof tableNumber === "number" ? `Table ${tableNumber}` : tableNumber}
+              </p>
             </div>
           </div>
           <button
