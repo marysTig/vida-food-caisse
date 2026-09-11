@@ -5,6 +5,7 @@ import { useTableStore, type TableItem } from "@/lib/tableStore";
 export function TableManager() {
   const {
     tables,
+    rooms,
     loading,
     addTable,
     updateTable,
@@ -18,8 +19,9 @@ export function TableManager() {
   const [isEditing, setIsEditing] = useState<TableItem | null>(null);
   const [showTableForm, setShowTableForm] = useState(false);
 
-  // Exclure les tables de la salle "emporter" de la vue admin
-  const adminTables = tables.filter(t => !t.roomId || t.roomId === "");
+  // Exclure uniquement les tables de la salle "emporter" de la vue admin
+  const emporterRoom = rooms.find(r => r.name.toLowerCase() === "emporter");
+  const adminTables = tables.filter(t => !emporterRoom || t.roomId !== emporterRoom.id);
 
   const handleDeleteTable = async (id: string) => {
     setSaving(true);
