@@ -420,13 +420,27 @@ function ProductForm({
     initialData?.options?.map(o => ({ label: o.label, price: o.price.toString() })) ?? []
   );
 
-  const addOption = () => setOptions(prev => [...prev, { label: "", price: "" }]);
+  const addOption = () => setOptions(prev => {
+    // Si c'est la toute première variante ajoutée, initialiser son prix avec le prix de base actuel
+    const newEntry = prev.length === 0 && price
+      ? { label: "", price }
+      : { label: "", price: "" };
+    return [...prev, newEntry];
+  });
 
   const removeOption = (i: number) =>
     setOptions(prev => prev.filter((_, idx) => idx !== i));
 
-  const updateOption = (i: number, field: "label" | "price", value: string) =>
-    setOptions(prev => prev.map((o, idx) => idx === i ? { ...o, [field]: value } : o));
+  const updateOption = (i: number, field: "label" | "price", value: string) => {
+    setOptions(prev => {
+      const updated = prev.map((o, idx) => idx === i ? { ...o, [field]: value } : o);
+      // Si c'est la 1ère variante et qu'on modifie son prix → synchroniser le prix de base
+      if (i === 0 && field === "price") {
+        setPrice(value);
+      }
+      return updated;
+    });
+  };
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -435,11 +449,17 @@ function ProductForm({
       .filter(o => o.label.trim())
       .map(o => ({ label: o.label.trim(), price: parseInt(o.price) || 0 }));
 
+    // CAS 1 : Produit avec variantes → le prix de base = prix de la 1ère variante
+    // CAS 2 : Produit sans variante → le prix de base est tel que saisi
+    const finalPrice = parsedOptions.length > 0
+      ? (parsedOptions[0]?.price ?? parseInt(price))
+      : parseInt(price);
+
     onSave({
       id: initialData?.id || `p_${Date.now()}`,
       name: name.trim(),
       category: selectedCategory as any,
-      price: parseInt(price),
+      price: finalPrice,
       image,
       available,
       options: parsedOptions.length > 0 ? parsedOptions : undefined,
@@ -472,11 +492,26 @@ function ProductForm({
         <label className="text-sm font-medium">
           Prix de base (DA)
           {options.length > 0 && (
-            <span className="ml-2 text-xs font-normal text-muted-foreground">(utilisé si aucune option sélectionnée)</span>
+            <span className="ml-2 text-xs font-normal text-primary/70 font-semibold">← égal au prix de la 1ère variante</span>
           )}
         </label>
-        <input required type="number" min="0" value={price} onChange={(e) => setPrice(e.target.value)}
-          className="rounded-md border border-border bg-card px-3 py-2 text-sm outline-none focus:border-primary" />
+        <input
+          required
+          type="number"
+          min="0"
+          value={price}
+          onChange={(e) => setPrice(e.target.value)}
+          readOnly={options.length > 0}
+          title={options.length > 0 ? "Modifiez le prix de la première variante pour changer ce prix" : undefined}
+          className={`rounded-md border border-border px-3 py-2 text-sm outline-none ${
+            options.length > 0
+              ? "bg-muted text-muted-foreground cursor-not-allowed select-none"
+              : "bg-card focus:border-primary"
+          }`}
+        />
+        {options.length > 0 && (
+          <p className="text-[11px] text-muted-foreground italic">Ce prix est automatiquement synchronisé avec le prix de la 1ère variante.</p>
+        )}
       </div>
 
       {/* Options dynamiques */}

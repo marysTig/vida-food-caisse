@@ -387,6 +387,7 @@ export function TableOrderSidebar({ tableId, tableNumber, mergedIds, onClose }: 
 
     // Seulement si la table est censée être occupée et que c'est la caisse qui ouvre
     if (isOccupied && !isServeur) {
+      // Différer le fetch de 16ms pour laisser le premier rendu s'afficher
       const fetchOrderData = async (retries = 3) => {
         for (let i = 0; i < retries; i++) {
           if (!mounted) return;
@@ -444,15 +445,7 @@ export function TableOrderSidebar({ tableId, tableNumber, mergedIds, onClose }: 
     });
   }, [category, query, products]);
 
-  const handleProductSelect = useCallback((product: Product) => {
-    if (product.options && product.options.length > 0) {
-      setOptionProduct(product);
-    } else {
-      addProduct(product);
-    }
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
-
-  const addProduct = (product: Product, selectedOption?: ProductOption) => {
+  const addProduct = useCallback((product: Product, selectedOption?: ProductOption) => {
     const prev = orders[tableId] || [];
     const existing = prev.find(
       (item) =>
@@ -471,7 +464,15 @@ export function TableOrderSidebar({ tableId, tableNumber, mergedIds, onClose }: 
         { id: `${product.id}-${Date.now()}`, product, quantity: 1, supplements: [], selectedOption },
       ]);
     }
-  };
+  }, [orders, tableId, setOrder]);
+
+  const handleProductSelect = useCallback((product: Product) => {
+    if (product.options && product.options.length > 0) {
+      setOptionProduct(product);
+    } else {
+      addProduct(product);
+    }
+  }, [addProduct]);
 
   const increase = useCallback((id: string) => {
     const prev = orders[tableId] || [];
@@ -666,8 +667,8 @@ export function TableOrderSidebar({ tableId, tableNumber, mergedIds, onClose }: 
   const handleNoteChange = useCallback((note: string) => setOrderNote(tableId, note), [tableId, setOrderNote]);
 
   return (
-    <div className="fixed inset-0 z-[100] flex justify-end bg-black/50 backdrop-blur-sm">
-      <div className="flex h-full w-full max-w-5xl bg-background shadow-2xl animate-in slide-in-from-right">
+    <div className="fixed inset-0 z-[100] flex justify-end bg-black/40">
+      <div className="flex h-full w-full max-w-5xl bg-background shadow-2xl" style={{ animation: 'slideInRight 180ms ease-out', willChange: 'transform' }}>
 
         {/* ── DESKTOP: côte à côte ── */}
         <div className="hidden md:flex md:flex-1 md:flex-col overflow-hidden">

@@ -55,7 +55,7 @@ export function ProductCard({ product, onSelect, readOnly = false }: ProductCard
         <div className="mt-auto flex w-full flex-col items-center justify-center pt-2 gap-2">
           <p className="text-base font-bold text-primary">
             {product.options && product.options.length > 0
-              ? `Dès ${formatDA(Math.min(...product.options.map(o => o.price)))}`
+              ? formatDA(Math.min(...product.options.map(o => o.price)))
               : formatDA(product.price)}
           </p>
           {/* Bouton + toujours visible sur mobile, visible au hover sur desktop */}

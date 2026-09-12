@@ -706,6 +706,7 @@ function TablesPage() {
       {/* Modal plein-écran avec catégories + produits + panier */}
       {activeTable && (
         <TableOrderSidebar
+          key={activeTable.id}
           tableId={activeTable.id}
           tableNumber={activeTable.number}
           mergedIds={activeTable.mergedIds}
