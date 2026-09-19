@@ -22,6 +22,7 @@ export function MenuManager() {
 
   const [activeCategory, setActiveCategory] = useState<string>("");
   const [newCatName, setNewCatName] = useState("");
+  const [newCatImage, setNewCatImage] = useState("");
   const [isEditingCat, setIsEditingCat] = useState<CategoryItem | null>(null);
   const [isEditing, setIsEditing] = useState<Product | null>(null);
   const [showProductForm, setShowProductForm] = useState(false);
@@ -40,15 +41,17 @@ export function MenuManager() {
       if (isEditingCat && isEditingCat.id) {
         await updateCategory(isEditingCat.id, {
           name: newCatName.trim(),
+          image: newCatImage,
         });
         if (activeCategory === isEditingCat.name) {
           setActiveCategory(newCatName.trim());
         }
         setIsEditingCat(null);
       } else {
-        await addCategory({ name: newCatName.trim() });
+        await addCategory({ name: newCatName.trim(), image: newCatImage });
       }
       setNewCatName("");
+      setNewCatImage("");
     } catch (err: any) {
       setError(err.message ?? "Erreur lors de la sauvegarde");
     } finally {
@@ -59,11 +62,13 @@ export function MenuManager() {
   const handleEditCategoryClick = (cat: CategoryItem) => {
     setIsEditingCat(cat);
     setNewCatName(cat.name);
+    setNewCatImage(cat.image || "");
   };
 
   const handleCancelEditCat = () => {
     setIsEditingCat(null);
     setNewCatName("");
+    setNewCatImage("");
   };
 
   const handleDeleteCategory = async (cat: CategoryItem) => {
@@ -187,14 +192,21 @@ export function MenuManager() {
 
         <form onSubmit={handleAddCategory} className="flex flex-col gap-3 rounded-xl border border-border bg-card p-4 max-w-sm">
           <h3 className="text-sm font-semibold">{isEditingCat ? "Modifier la catégorie" : "Ajouter une catégorie"}</h3>
-          <input
-            type="text"
-            placeholder="Nom de la catégorie..."
-            value={newCatName}
-            onChange={(e) => setNewCatName(e.target.value)}
-            className="rounded-md border border-border bg-background px-3 py-2 text-sm outline-none focus:border-primary"
-            required
-          />
+          <div className="flex flex-col gap-1.5">
+            <label className="text-sm font-medium">Nom de la catégorie</label>
+            <input
+              type="text"
+              placeholder="Nom de la catégorie..."
+              value={newCatName}
+              onChange={(e) => setNewCatName(e.target.value)}
+              className="rounded-md border border-border bg-background px-3 py-2 text-sm outline-none focus:border-primary"
+              required
+            />
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <label className="text-sm font-medium">Image de la catégorie</label>
+            <ImageUploader value={newCatImage} onChange={setNewCatImage} />
+          </div>
           <div className="flex gap-2 mt-1">
             {isEditingCat && (
               <button type="button" onClick={handleCancelEditCat} className="flex-1 rounded-md px-4 py-2 text-sm font-medium hover:bg-muted">
