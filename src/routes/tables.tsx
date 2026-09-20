@@ -20,6 +20,7 @@ import { toast } from "sonner";
 import { UserLogin } from "@/components/auth/UserLogin";
 import { ComponentLoader } from "@/components/ui/PageLoader";
 import { KitchenPrintHub } from "@/components/pos/KitchenPrintHub";
+import { recordZReport } from "@/lib/zReport";
 
 export const Route = createFileRoute("/tables")({
   head: () => ({
@@ -442,7 +443,13 @@ function TablesPage() {
     const itemsToPrint = allIds.flatMap(id => orders[id] ?? []);
     const totalToPrint = cartSubtotal(itemsToPrint);
     const tableNumber = checkoutTable.number;
-    // -------------------------------------------
+    let tableNumberStr = String(tableNumber);
+    if (multiCheckoutTables.length > 0) {
+      const numbers = tableData.filter(t => multiCheckoutTables.includes(t.id)).map(t => t.number).join(", ");
+      tableNumberStr = `Tables ${numbers}`;
+    }
+    // Enregistrer dans l'historique du Rapport Z
+    recordZReport(itemsToPrint, "table", tableNumberStr);
 
     clearOrder(checkoutTable.id);
     await updateTable(checkoutTable.id, {

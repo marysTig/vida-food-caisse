@@ -18,6 +18,7 @@ import { printerService } from "@/lib/printerService";
 import { sendKitchenBroadcast } from "@/lib/kitchenPrintSender";
 import { toast } from "sonner";
 import { ComponentLoader } from "@/components/ui/PageLoader";
+import { recordZReport } from "@/lib/zReport";
 
 // ── Guard anti-double-impression cuisine ──────────────────────────────────────
 // Set module-level (singleton pour toute la durée de la session JS).
@@ -614,6 +615,9 @@ export function TableOrderSidebar({ tableId, tableNumber, mergedIds, onClose }: 
     const itemsToPrint = [...items];
     const totalToPrint = cartSubtotal(itemsToPrint);
     // ----------------------------------------------
+
+    // Enregistrer dans l'historique du Rapport Z
+    recordZReport(itemsToPrint, "table", tableNumber);
 
     // 1. Clear items + note
     clearOrder(tableId);

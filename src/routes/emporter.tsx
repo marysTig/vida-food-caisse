@@ -17,6 +17,7 @@ import { cartSubtotal, type CartItem } from "@/lib/cart";
 import { toast } from "sonner";
 import { KitchenPrintHub } from "@/components/pos/KitchenPrintHub";
 import { useSessionStore } from "@/lib/authStore";
+import { recordZReport } from "@/lib/zReport";
 
 export const Route = createFileRoute("/emporter")({
   head: () => ({
@@ -96,6 +97,9 @@ function EmporterPage() {
     // Récupérer les items avant de clear
     const itemsToPrint = orders[checkoutTable.id] || [];
     
+    // Enregistrer dans l'historique du Rapport Z
+    recordZReport(itemsToPrint, "emporter", checkoutTable.number);
+
     clearOrder(checkoutTable.id);
     await updateTable(checkoutTable.id, {
       status: "libre",

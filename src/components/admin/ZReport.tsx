@@ -6,11 +6,20 @@ import { DayPicker } from "react-day-picker";
 import "react-day-picker/dist/style.css";
 import { supabase } from "@/lib/supabase";
 
+export type ZReportProduct = {
+  product_name: string;
+  variant_name: string | null;
+  unit_price: number;
+  quantity: number;
+  line_total: number;
+};
+
 type DayStats = {
   totalOrders: number;
   totalRevenue: number;
   totalCash: number;
   totalCard: number;
+  products: ZReportProduct[];
 };
 
 async function fetchDayStats(date: Date): Promise<DayStats> {
@@ -43,7 +52,43 @@ async function fetchDayStats(date: Date): Promise<DayStats> {
     .reduce((acc: number, r) => acc + (r["total"] as number), 0);
   const totalRevenue = totalCash + totalCard;
 
-  return { totalOrders, totalRevenue, totalCash, totalCard };
+  // Récupération de l'historique des produits vendus
+  const { data: historyData, error: historyError } = await supabase
+    .from("z_report_history")
+    .select("*")
+    .gte("cashout_date", start.toISOString())
+    .lte("cashout_date", end.toISOString());
+
+  if (historyError) {
+    console.error("Erreur chargement historique Z:", historyError.message);
+  }
+
+  // Agréger les produits
+  const productMap = new Map<string, ZReportProduct>();
+  const historyRows = (historyData ?? []) as any[];
+
+  for (const row of historyRows) {
+    // Clé d'agrégation: nom du produit + nom de la variante (ou vide) + prix unitaire
+    const key = `${row.product_name}|${row.variant_name || ""}|${row.unit_price}`;
+    
+    if (productMap.has(key)) {
+      const existing = productMap.get(key)!;
+      existing.quantity += row.quantity;
+      existing.line_total += row.line_total;
+    } else {
+      productMap.set(key, {
+        product_name: row.product_name,
+        variant_name: row.variant_name,
+        unit_price: row.unit_price,
+        quantity: row.quantity,
+        line_total: row.line_total,
+      });
+    }
+  }
+
+  const products = Array.from(productMap.values()).sort((a, b) => b.line_total - a.line_total);
+
+  return { totalOrders, totalRevenue, totalCash, totalCard, products };
 }
 
 export function ZReport() {
@@ -122,13 +167,52 @@ export function ZReport() {
             />
           </div>
 
-          <div className="flex-1 rounded-xl border border-border bg-card p-6 flex flex-col items-center justify-center text-muted-foreground">
-            <TrendingUp className="h-12 w-12 opacity-20 mb-4" />
-            <p>
-              {stats?.totalOrders === 0
-                ? "Aucune commande encaissée ce jour."
-                : "Les graphiques détaillés seront disponibles prochainement."}
-            </p>
+          <div className="flex flex-col gap-4">
+            <div className="rounded-xl border border-border bg-card overflow-hidden">
+              <div className="px-6 py-4 border-b border-border bg-muted/40">
+                <h3 className="text-lg font-bold">Produits vendus</h3>
+              </div>
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm text-left">
+                  <thead className="text-xs text-muted-foreground bg-muted/20 border-b border-border">
+                    <tr>
+                      <th className="px-6 py-3 font-semibold">Produit</th>
+                      <th className="px-6 py-3 font-semibold">Variante</th>
+                      <th className="px-6 py-3 font-semibold text-right">Qté</th>
+                      <th className="px-6 py-3 font-semibold text-right">Total</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-border">
+                    {stats?.products && stats.products.length > 0 ? (
+                      stats.products.map((p, idx) => (
+                        <tr key={idx} className="hover:bg-muted/10 transition-colors">
+                          <td className="px-6 py-3 font-medium text-foreground">{p.product_name}</td>
+                          <td className="px-6 py-3 text-muted-foreground">{p.variant_name || "—"}</td>
+                          <td className="px-6 py-3 text-right font-semibold">{p.quantity}</td>
+                          <td className="px-6 py-3 text-right font-bold text-primary">{(p.line_total).toLocaleString("fr-FR")} DA</td>
+                        </tr>
+                      ))
+                    ) : (
+                      <tr>
+                        <td colSpan={4} className="px-6 py-8 text-center text-muted-foreground">
+                          Aucun produit vendu ce jour.
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                  {stats?.products && stats.products.length > 0 && (
+                    <tfoot className="bg-muted/40 font-bold border-t border-border">
+                      <tr>
+                        <td colSpan={3} className="px-6 py-4 text-right">TOTAL JOURNÉE :</td>
+                        <td className="px-6 py-4 text-right text-success text-base">
+                          {stats.products.reduce((sum, p) => sum + p.line_total, 0).toLocaleString("fr-FR")} DA
+                        </td>
+                      </tr>
+                    </tfoot>
+                  )}
+                </table>
+              </div>
+            </div>
           </div>
         </>
       )}
