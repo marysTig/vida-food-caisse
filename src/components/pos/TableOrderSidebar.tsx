@@ -352,11 +352,19 @@ function ProductSelectorDesktop({
 // ── TableOrderSidebar ─────────────────────────────────────────────────────────
 
 export function TableOrderSidebar({ tableId, tableNumber, mergedIds, onClose }: TableOrderSidebarProps) {
-  const { tables, updateTable } = useTableStore();
+  const { tables, updateTable, rooms } = useTableStore();
   const table = tables.find((t) => t.id === tableId);
   const isOccupied = table?.status === "occupee";
   const currentUser = useSessionStore((s) => s.currentUser);
   const isServeur = currentUser?.role === "serveur";
+
+  // Detecter si c'est une commande A Emporter
+  const emporterRoom = rooms.find(r => r.name.toLowerCase() === "emporter");
+  const isEmporter = emporterRoom ? table?.roomId === emporterRoom.id : false;
+  // Label utilise pour l'impression cuisine
+  const kitchenOrderLabel: string | number = isEmporter
+    ? `EMPORTER #${tableNumber}`
+    : tableNumber;
 
   const mergedNumbers = mergedIds && mergedIds.length > 0
     ? mergedIds.map(id => tables.find(t => t.id === id)?.number).filter(Boolean).join(", ")
@@ -565,7 +573,7 @@ export function TableOrderSidebar({ tableId, tableNumber, mergedIds, onClose }: 
           sendKitchenBroadcast({
             printId,
             tableId,
-            tableNumber,
+            tableNumber: isEmporter ? `EMPORTER #${tableNumber}` : tableNumber,
             items,
             orderNote
           }).then(() => {
@@ -587,7 +595,7 @@ export function TableOrderSidebar({ tableId, tableNumber, mergedIds, onClose }: 
             for (const printer of kitchenPrinters) {
               console.log(`[CAISSE PRINT] Printing to ${printer.name}`);
               try {
-                await printerService.printKitchen(printer, items, tableNumber, orderNote);
+                await printerService.printKitchen(printer, items, kitchenOrderLabel, orderNote);
                 console.log(`[CAISSE PRINT] Print success for ${printer.name}`);
               } catch (err: any) {
                 console.error(`[Cuisine] Erreur impression ${printer.name}:`, err);

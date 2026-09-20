@@ -363,8 +363,9 @@ export const printerService = {
     // Afficher Table N ou A Emporter #N
     const orderNumStr = String(orderNumber);
     let orderLabel: string;
-    if (orderNumStr.startsWith("A EMPORTER") || orderNumStr.toLowerCase().startsWith("emport")) {
-      orderLabel = `A EMPORTER #${orderNumStr.replace(/\D+/g, "")}`;
+    if (orderNumStr.toLowerCase().startsWith("emport")) {
+      // Déjà formaté comme "EMPORTER #N" — afficher tel quel
+      orderLabel = orderNumStr.replace(/^emporter\s*/i, "A EMPORTER ");
     } else {
       orderLabel = `Table ${orderNumStr}`;
     }
