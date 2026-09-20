@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { format } from "date-fns";
 import { fr } from "date-fns/locale";
-import { Calendar as CalendarIcon, TrendingUp, CreditCard, Banknote, Receipt, Loader2 } from "lucide-react";
+import { Calendar as CalendarIcon, Loader2 } from "lucide-react";
 import { DayPicker } from "react-day-picker";
 import "react-day-picker/dist/style.css";
 import { supabase } from "@/lib/supabase";
@@ -23,36 +23,13 @@ type DayStats = {
 };
 
 async function fetchDayStats(date: Date): Promise<DayStats> {
-  // Build day range in UTC from the local date
+  // Build day range from local date
   const start = new Date(date);
   start.setHours(0, 0, 0, 0);
   const end = new Date(date);
   end.setHours(23, 59, 59, 999);
 
-  const { data, error } = await supabase
-    .from("orders")
-    .select("total, payment_method")
-    .gte("created_at", start.toISOString())
-    .lte("created_at", end.toISOString())
-    .eq("status", "paid");
-
-  if (error) {
-    console.error("Erreur chargement rapport Z:", error.message);
-    return { totalOrders: 0, totalRevenue: 0, totalCash: 0, totalCard: 0 };
-  }
-
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const rows = (data ?? []) as any[];
-  const totalOrders = rows.length;
-  const totalCash = rows
-    .filter((r) => r["payment_method"] === "cash")
-    .reduce((acc: number, r) => acc + (r["total"] as number), 0);
-  const totalCard = rows
-    .filter((r) => r["payment_method"] === "card")
-    .reduce((acc: number, r) => acc + (r["total"] as number), 0);
-  const totalRevenue = totalCash + totalCard;
-
-  // Récupération de l'historique des produits vendus
+  // Récupération de l'historique des produits vendus depuis z_report_history
   const { data: historyData, error: historyError } = await supabase
     .from("z_report_history")
     .select("*")
@@ -61,6 +38,7 @@ async function fetchDayStats(date: Date): Promise<DayStats> {
 
   if (historyError) {
     console.error("Erreur chargement historique Z:", historyError.message);
+    return { totalOrders: 0, totalRevenue: 0, totalCash: 0, totalCard: 0, products: [] };
   }
 
   // Agréger les produits
@@ -70,7 +48,7 @@ async function fetchDayStats(date: Date): Promise<DayStats> {
   for (const row of historyRows) {
     // Clé d'agrégation: nom du produit + nom de la variante (ou vide) + prix unitaire
     const key = `${row.product_name}|${row.variant_name || ""}|${row.unit_price}`;
-    
+
     if (productMap.has(key)) {
       const existing = productMap.get(key)!;
       existing.quantity += row.quantity;
@@ -88,7 +66,7 @@ async function fetchDayStats(date: Date): Promise<DayStats> {
 
   const products = Array.from(productMap.values()).sort((a, b) => b.line_total - a.line_total);
 
-  return { totalOrders, totalRevenue, totalCash, totalCard, products };
+  return { totalOrders: 0, totalRevenue: 0, totalCash: 0, totalCard: 0, products };
 }
 
 export function ZReport() {
@@ -144,29 +122,6 @@ export function ZReport() {
         </div>
       ) : (
         <>
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-            <StatCard
-              title="Chiffre d'Affaires"
-              value={`${(stats?.totalRevenue ?? 0).toLocaleString("fr-FR")} DA`}
-              icon={<TrendingUp className="h-5 w-5 text-primary" />}
-            />
-            <StatCard
-              title="Commandes Encaissées"
-              value={(stats?.totalOrders ?? 0).toString()}
-              icon={<Receipt className="h-5 w-5 text-blue-500" />}
-            />
-            <StatCard
-              title="Paiements Espèces"
-              value={`${(stats?.totalCash ?? 0).toLocaleString("fr-FR")} DA`}
-              icon={<Banknote className="h-5 w-5 text-green-500" />}
-            />
-            <StatCard
-              title="Paiements Carte"
-              value={`${(stats?.totalCard ?? 0).toLocaleString("fr-FR")} DA`}
-              icon={<CreditCard className="h-5 w-5 text-orange-500" />}
-            />
-          </div>
-
           <div className="flex flex-col gap-4">
             <div className="rounded-xl border border-border bg-card overflow-hidden">
               <div className="px-6 py-4 border-b border-border bg-muted/40">
@@ -216,18 +171,6 @@ export function ZReport() {
           </div>
         </>
       )}
-    </div>
-  );
-}
-
-function StatCard({ title, value, icon }: { title: string; value: string; icon: React.ReactNode }) {
-  return (
-    <div className="flex flex-col gap-2 rounded-xl border border-border bg-card p-5 shadow-sm">
-      <div className="flex items-center justify-between">
-        <h3 className="text-sm font-medium text-muted-foreground">{title}</h3>
-        {icon}
-      </div>
-      <p className="text-2xl font-bold">{value}</p>
     </div>
   );
 }
