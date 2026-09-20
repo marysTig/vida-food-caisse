@@ -333,6 +333,7 @@ export function MenuManager() {
               initialData={isEditing}
               category={effectiveCategory}
               categories={categories.map(c => c.name)}
+              fullCategories={categories}
               onSave={async (prod) => {
                 setSaving(true);
                 setError(null);
@@ -411,6 +412,7 @@ function ProductForm({
   initialData,
   category,
   categories,
+  fullCategories,
   onSave,
   onCancel,
   saving,
@@ -418,14 +420,25 @@ function ProductForm({
   initialData: Product | null;
   category: string;
   categories: string[];
+  fullCategories: CategoryItem[];
   onSave: (p: Product) => void;
   onCancel: () => void;
   saving: boolean;
 }) {
+  const initialCategoryName = initialData?.category || category;
+  const initialCat = fullCategories.find(c => c.name === initialCategoryName);
+
   const [name, setName] = useState(initialData?.name || "");
   const [price, setPrice] = useState(initialData?.price?.toString() || "");
-  const [image, setImage] = useState(initialData?.image || "");
-  const [selectedCategory, setSelectedCategory] = useState(initialData?.category || category);
+  const [image, setImage] = useState(() => {
+    if (initialData?.image) return initialData.image;
+    return initialCat?.image || "";
+  });
+  const [hasCustomImage, setHasCustomImage] = useState(() => {
+    if (!initialData?.image) return false;
+    return initialData.image !== initialCat?.image;
+  });
+  const [selectedCategory, setSelectedCategory] = useState(initialCategoryName);
   const [available, setAvailable] = useState(initialData?.available ?? true);
   const [ingredients, setIngredients] = useState(initialData?.ingredients || "");
   const [options, setOptions] = useState<{ label: string; price: string }[]>(
@@ -493,7 +506,14 @@ function ProductForm({
       {/* Catégorie */}
       <div className="flex flex-col gap-1.5">
         <label className="text-sm font-medium">Catégorie</label>
-        <select value={selectedCategory} onChange={(e) => setSelectedCategory(e.target.value)}
+        <select value={selectedCategory} onChange={(e) => {
+          const newCatName = e.target.value;
+          setSelectedCategory(newCatName);
+          if (!hasCustomImage) {
+            const newCat = fullCategories.find(c => c.name === newCatName);
+            setImage(newCat?.image || "");
+          }
+        }}
           className="rounded-md border border-border bg-card px-3 py-2 text-sm outline-none focus:border-primary">
           {categories.map(c => <option key={c} value={c}>{c}</option>)}
         </select>
@@ -608,7 +628,10 @@ function ProductForm({
       {/* Image */}
       <div className="flex flex-col gap-1.5">
         <label className="text-sm font-medium">Image du produit</label>
-        <ImageUploader value={image} onChange={setImage} />
+        <ImageUploader value={image} onChange={(val) => {
+          setImage(val);
+          setHasCustomImage(true);
+        }} />
       </div>
 
       <div className="mt-2 flex items-center justify-end gap-3">

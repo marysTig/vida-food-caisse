@@ -1,6 +1,7 @@
 import type { Product } from "@/data/menu";
 import { formatDA } from "@/data/menu";
 import { Plus } from "lucide-react";
+import { useMenuStore } from "@/lib/menuStore";
 
 type ProductCardProps = {
   product: Product;
@@ -9,13 +10,17 @@ type ProductCardProps = {
 };
 
 export function ProductCard({ product, onSelect, readOnly = false }: ProductCardProps) {
+  const { categories } = useMenuStore();
+  const categoryItem = categories.find((c) => c.name === product.category);
+  const displayImage = product.image || categoryItem?.image || "";
+
   const inner = (
     <>
       <div className="relative flex justify-center pt-4 bg-transparent">
         <div className="relative aspect-square w-24 h-24 sm:w-28 sm:h-28 overflow-hidden rounded-full bg-muted shadow-sm border border-border">
-          {product.image ? (
+          {displayImage ? (
             <img
-              src={product.image}
+              src={displayImage}
               alt={product.name}
               loading="lazy"
               width={512}
