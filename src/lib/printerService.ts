@@ -247,8 +247,7 @@ export const printerService = {
     // --- EN-TÊTE ---
     ticket += ALIGN_CENTER + DOUBLE_HEIGHT_WIDTH + BOLD_ON + "LA VIDA FOOD\n" + NORMAL_SIZE + BOLD_OFF;
     ticket += "GOOD FOOD . GOOD MOOD\n\n";
-    ticket += "Merci pour votre visite !\n";
-    ticket += "♥\n\n";
+    ticket += "Merci pour votre visite !\n\n";
     
     // --- INFOS RESTO ---
     ticket += ALIGN_LEFT;
@@ -257,7 +256,7 @@ export const printerService = {
     ticket += " @lavidafood\n";
     
     ticket += ALIGN_CENTER;
-    ticket += "\nFast Food with Love \u2665\n";
+    ticket += "\nFast Food with Love\n";
     ticket += ALIGN_LEFT;
     ticket += SEP;
 
@@ -287,7 +286,11 @@ export const printerService = {
       const puStr = formatNumber(unitPrice);
       const totStr = formatNumber(lineTotalVal);
       
+      // Nom du produit + variante sur la même ligne si possible
       let name = item.product.name;
+      if (item.selectedOption) {
+        name = `${name} ${item.selectedOption.label}`;
+      }
       const MAX_PROD_LEN = 14;
       
       if (name.length > MAX_PROD_LEN) {
@@ -313,9 +316,6 @@ export const printerService = {
         ticket += formatLine(item.quantity.toString(), name, puStr, totStr) + "\n";
       }
 
-      if (item.selectedOption) {
-        ticket += `    (${item.selectedOption.label})\n`;
-      }
       for (const sup of item.supplements) {
         ticket += `    + ${sup.label}\n`;
       }
@@ -359,7 +359,16 @@ export const printerService = {
     // ── En-tête restaurant ──────────────────────────────
     ticket += ALIGN_CENTER;
     ticket += DOUBLE_HEIGHT_WIDTH + BOLD_ON + "LA VIDA FOOD\n" + NORMAL_SIZE + BOLD_OFF;
-    ticket += BOLD_ON + `COMMANDE #${orderNumber}\n` + BOLD_OFF;
+
+    // Afficher Table N ou A Emporter #N
+    const orderNumStr = String(orderNumber);
+    let orderLabel: string;
+    if (orderNumStr.startsWith("A EMPORTER") || orderNumStr.toLowerCase().startsWith("emport")) {
+      orderLabel = `A EMPORTER #${orderNumStr.replace(/\D+/g, "")}`;
+    } else {
+      orderLabel = `Table ${orderNumStr}`;
+    }
+    ticket += BOLD_ON + DOUBLE_HEIGHT_WIDTH + orderLabel + "\n" + NORMAL_SIZE + BOLD_OFF;
     ticket += `${dateStr}\n`;
     ticket += `${timeStr}\n`;
     ticket += LF;
@@ -368,10 +377,11 @@ export const printerService = {
     ticket += ALIGN_LEFT;
     for (const item of filteredItems) {
       ticket += SEP;
-      ticket += BOLD_ON + `${item.quantity} x ${item.product.name}\n` + BOLD_OFF;
+      let kitchenName = item.product.name;
       if (item.selectedOption) {
-        ticket += `  (${item.selectedOption.label})\n`;
+        kitchenName = `${item.product.name} ${item.selectedOption.label}`;
       }
+      ticket += BOLD_ON + `${item.quantity} x ${kitchenName}\n` + BOLD_OFF;
       for (const sup of item.supplements) {
         ticket += `  + ${sup.label}\n`;
       }
