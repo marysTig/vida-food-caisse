@@ -20,7 +20,7 @@ import { toast } from "sonner";
 import { ComponentLoader } from "@/components/ui/PageLoader";
 import { recordZReport } from "@/lib/zReport";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { useGlobalSupplementsStore, type GlobalSupplement } from "@/lib/globalSupplementsStore";
+import { useGlobalSupplementsStore, reloadGlobalSupplements, type GlobalSupplement } from "@/lib/globalSupplementsStore";
 
 // ── Guard anti-double-impression cuisine ──────────────────────────────────────
 // Set module-level (singleton pour toute la durée de la session JS).
@@ -449,6 +449,11 @@ export function TableOrderSidebar({ tableId, tableNumber, mergedIds, onClose }: 
 
   const { products, allCategoryNames, loading } = useMenuStore();
   const { printers } = usePrinterStore();
+
+  // Garantir que les suppléments globaux sont chargés quand la sidebar s'ouvre
+  useEffect(() => {
+    void reloadGlobalSupplements();
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     let mounted = true;
