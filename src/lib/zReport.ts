@@ -1,5 +1,6 @@
 import { supabase } from "./supabase";
 import { type CartItem } from "./cart";
+import { toast } from "sonner";
 
 export async function recordZReport(
   items: CartItem[],
@@ -39,11 +40,26 @@ export async function recordZReport(
   try {
     const { error } = await supabase.from("z_report_history").insert(rows);
     if (error) {
-      console.error("Erreur lors de l'enregistrement de l'historique du Rapport Z:", error);
+      console.error("Erreur Rapport Z:", error);
+      toast.error("Rapport Z non enregistré", {
+        description: error.message,
+        duration: 5000,
+      });
     } else {
-      console.log("Historique du Rapport Z enregistré avec succès.");
+      const label = orderType === "emporter"
+        ? `À Emporter #${orderOrTableNumber}`
+        : `Table ${orderOrTableNumber}`;
+      toast.success("Rapport Z mis à jour", {
+        description: `${items.length} produit(s) enregistré(s) — ${label}`,
+        duration: 3000,
+      });
     }
-  } catch (err) {
-    console.error("Exception lors de l'enregistrement de l'historique du Rapport Z:", err);
+  } catch (err: any) {
+    console.error("Exception Rapport Z:", err);
+    toast.error("Rapport Z — erreur inattendue", {
+      description: err?.message ?? "Vérifiez la connexion Supabase.",
+      duration: 5000,
+    });
   }
 }
+

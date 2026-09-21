@@ -7,6 +7,7 @@ export type CategoryItem = {
   id: string;
   name: string;
   image: string; // mapped from image_url
+  sort_order?: number;
 };
 
 // ── Supabase helpers ──────────────────────────────────────────────
@@ -14,7 +15,8 @@ export type CategoryItem = {
 async function fetchCategoriesFromDB(): Promise<CategoryItem[]> {
   const { data, error } = await supabase
     .from("categories")
-    .select("id, name, image_url, created_at")
+    .select("id, name, image_url, created_at, sort_order")
+    .order("sort_order", { ascending: true })
     .order("created_at", { ascending: true });
 
   if (error) {
@@ -27,13 +29,15 @@ async function fetchCategoriesFromDB(): Promise<CategoryItem[]> {
     id: row["id"] as string,
     name: row["name"] as string,
     image: (row["image_url"] as string | null) ?? "",
+    sort_order: (row["sort_order"] as number | null) ?? 0,
   }));
 }
 
 async function fetchProductsFromDB(): Promise<Product[]> {
   const { data, error } = await supabase
     .from("products")
-    .select("id, name, category_id, price, image_url, available, options, ingredients, created_at, categories(id, name)")
+    .select("id, name, category_id, price, image_url, available, options, ingredients, created_at, sort_order, categories(id, name)")
+    .order("sort_order", { ascending: true })
     .order("created_at", { ascending: true });
 
   if (error) {
@@ -57,6 +61,7 @@ async function fetchProductsFromDB(): Promise<Product[]> {
       available: (row["available"] as boolean) ?? true,
       options: (row["options"] as Product["options"]) ?? undefined,
       ingredients: (row["ingredients"] as string | null) ?? undefined,
+      sort_order: (row["sort_order"] as number | null) ?? 0,
     };
   });
 }
@@ -172,6 +177,25 @@ export function useMenuStore() {
     await reload();
   };
 
+  // ── Reorder Catégories ──────────────────────────────────────────
+  // orderedIds: tableau d'IDs dans le nouvel ordre souhaité
+  const reorderCategories = async (orderedIds: string[]) => {
+    // Optimistic update in local state
+    const currentCats = useMenuGlobalState.getState().categories;
+    const reordered = orderedIds
+      .map((id) => currentCats.find((c) => c.id === id))
+      .filter(Boolean) as CategoryItem[];
+    setCategories(reordered.map((c, i) => ({ ...c, sort_order: i })));
+
+    // Persist to DB: batch update each category's sort_order
+    const updates = orderedIds.map((id, index) =>
+      supabase.from("categories").update({ sort_order: index }).eq("id", id)
+    );
+    const results = await Promise.all(updates);
+    const firstError = results.find((r) => r.error);
+    if (firstError?.error) throw new Error(firstError.error.message);
+  };
+
   // ── CRUD Produits ───────────────────────────────────────────────
 
   const addProduct = async (prod: Omit<Product, "id">) => {
@@ -215,6 +239,27 @@ export function useMenuStore() {
     await reload();
   };
 
+  // ── Reorder Produits ────────────────────────────────────────────
+  // orderedIds: tableau d'IDs dans le nouvel ordre souhaité (pour la catégorie active)
+  const reorderProducts = async (orderedIds: string[]) => {
+    // Optimistic update: reorder in local state keeping other categories intact
+    const currentProds = useMenuGlobalState.getState().products;
+    const orderedSet = new Set(orderedIds);
+    const others = currentProds.filter((p) => !orderedSet.has(p.id));
+    const reorderedSlice = orderedIds
+      .map((id) => currentProds.find((p) => p.id === id))
+      .filter(Boolean) as Product[];
+    setProducts([...others, ...reorderedSlice.map((p, i) => ({ ...p, sort_order: i }))]);
+
+    // Persist to DB
+    const updates = orderedIds.map((id, index) =>
+      supabase.from("products").update({ sort_order: index }).eq("id", id)
+    );
+    const results = await Promise.all(updates);
+    const firstError = results.find((r) => r.error);
+    if (firstError?.error) throw new Error(firstError.error.message);
+  };
+
   // Helper : noms de catégories avec "Tous" en premier
   const allCategoryNames = ["Tous", ...categories.map((c) => c.name)];
 
@@ -227,8 +272,10 @@ export function useMenuStore() {
     addCategory,
     updateCategory,
     deleteCategory,
+    reorderCategories,
     addProduct,
     updateProduct,
     deleteProduct,
+    reorderProducts,
   };
 }

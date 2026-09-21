@@ -1,10 +1,78 @@
-import { useState } from "react";
-import { Plus, Trash2, Edit2, ImageIcon, Layers, ShoppingBag, ArrowLeft, Tag, Folder, Box, Coffee, Utensils, ChefHat, Loader2 } from "lucide-react";
+import { useState, useRef } from "react";
+import { Plus, Trash2, Edit2, ImageIcon, Layers, ShoppingBag, ArrowLeft, Tag, Folder, Box, Coffee, Utensils, ChefHat, Loader2, GripVertical } from "lucide-react";
 import { ImageUploader } from "./ImageUploader";
 import { type Product } from "@/data/menu";
 import { useMenuStore, type CategoryItem } from "@/lib/menuStore";
 
 type MenuView = "home" | "categories" | "products";
+
+// ── useDragReorder ─────────────────────────────────────────────────
+// Generic hook that manages HTML5 drag-and-drop list reordering.
+// Returns drag event props for each item and the reordered list on drop.
+
+function useDragReorder<T extends { id: string }>(
+  items: T[],
+  onReorder: (newOrder: T[]) => void,
+) {
+  const draggedId = useRef<string | null>(null);
+  const [dragOverId, setDragOverId] = useState<string | null>(null);
+  const [isDragging, setIsDragging] = useState(false);
+
+  const getProps = (id: string) => ({
+    draggable: true as const,
+    onDragStart: (e: React.DragEvent) => {
+      draggedId.current = id;
+      setIsDragging(true);
+      e.dataTransfer.effectAllowed = "move";
+      // Slight delay so the browser snapshot shows the card before it fades
+      setTimeout(() => {
+        setDragOverId(id);
+      }, 0);
+    },
+    onDragEnter: (e: React.DragEvent) => {
+      e.preventDefault();
+      if (draggedId.current !== id) setDragOverId(id);
+    },
+    onDragOver: (e: React.DragEvent) => {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = "move";
+    },
+    onDragLeave: () => {
+      // Keep dragOverId so the highlight doesn't flicker when moving over children
+    },
+    onDrop: (e: React.DragEvent) => {
+      e.preventDefault();
+      const fromId = draggedId.current;
+      const toId = id;
+      if (!fromId || fromId === toId) {
+        draggedId.current = null;
+        setDragOverId(null);
+        setIsDragging(false);
+        return;
+      }
+
+      const fromIdx = items.findIndex((x) => x.id === fromId);
+      const toIdx = items.findIndex((x) => x.id === toId);
+      if (fromIdx === -1 || toIdx === -1) return;
+
+      const next = [...items];
+      const [moved] = next.splice(fromIdx, 1) as [T];
+      next.splice(toIdx, 0, moved);
+
+      draggedId.current = null;
+      setDragOverId(null);
+      setIsDragging(false);
+      onReorder(next);
+    },
+    onDragEnd: () => {
+      draggedId.current = null;
+      setDragOverId(null);
+      setIsDragging(false);
+    },
+  });
+
+  return { getProps, dragOverId, isDragging, draggedId };
+}
 
 export function MenuManager() {
   const [view, setView] = useState<MenuView>("home");
@@ -15,9 +83,11 @@ export function MenuManager() {
     addCategory,
     updateCategory,
     deleteCategory,
+    reorderCategories,
     addProduct,
     updateProduct,
     deleteProduct,
+    reorderProducts,
   } = useMenuStore();
 
   const [activeCategory, setActiveCategory] = useState<string>("");
@@ -27,10 +97,38 @@ export function MenuManager() {
   const [isEditing, setIsEditing] = useState<Product | null>(null);
   const [showProductForm, setShowProductForm] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [reordering, setReordering] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   // Sync activeCategory when categories load
   const effectiveCategory = activeCategory || categories[0]?.name || "";
+
+  // ── Drag & drop for categories ──────────────────────────────────
+  const catDrag = useDragReorder(categories, async (newOrder) => {
+    setReordering(true);
+    setError(null);
+    try {
+      await reorderCategories(newOrder.map((c) => c.id));
+    } catch (err: any) {
+      setError(err.message ?? "Erreur lors du réordonnancement");
+    } finally {
+      setReordering(false);
+    }
+  });
+
+  // ── Drag & drop for products (filtered by active category) ──────
+  const filteredProducts = products.filter((p) => p.category === effectiveCategory);
+  const prodDrag = useDragReorder(filteredProducts, async (newOrder) => {
+    setReordering(true);
+    setError(null);
+    try {
+      await reorderProducts(newOrder.map((p) => p.id));
+    } catch (err: any) {
+      setError(err.message ?? "Erreur lors du réordonnancement");
+    } finally {
+      setReordering(false);
+    }
+  });
 
   const handleAddCategory = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -184,6 +282,11 @@ export function MenuManager() {
             <ArrowLeft className="h-4 w-4" /> Retour
           </button>
           <h2 className="text-xl font-bold">Gestion des Catégories</h2>
+          {reordering && (
+            <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
+              <Loader2 className="h-3 w-3 animate-spin" /> Enregistrement…
+            </span>
+          )}
         </div>
 
         {error && (
@@ -223,42 +326,74 @@ export function MenuManager() {
           </div>
         </form>
 
+        {/* Drag hint */}
+        {!loading && categories.length > 1 && (
+          <p className="flex items-center gap-1.5 text-xs text-muted-foreground -mt-3">
+            <GripVertical className="h-3.5 w-3.5" />
+            Glissez les cartes pour réorganiser l'ordre des catégories
+          </p>
+        )}
+
         {loading ? (
           <div className="flex items-center gap-2 text-muted-foreground">
             <Loader2 className="h-4 w-4 animate-spin" /> Chargement…
           </div>
         ) : (
           <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4">
-            {categories.map(cat => (
-              <div key={cat.id ?? cat.name} className="group relative flex flex-col gap-2 rounded-xl border border-border bg-card p-2">
-                <div className="relative aspect-[4/3] w-full overflow-hidden rounded-lg bg-muted">
-                  {cat.image ? (
-                    <img src={cat.image} alt={cat.name} className="h-full w-full object-cover" />
-                  ) : (
-                    <div className="flex h-full items-center justify-center text-muted-foreground">
-                      <ImageIcon className="h-6 w-6 opacity-20" />
+            {categories.map(cat => {
+              const dragProps = catDrag.getProps(cat.id);
+              const isOver = catDrag.dragOverId === cat.id && catDrag.draggedId.current !== cat.id;
+              const isDragged = catDrag.draggedId.current === cat.id;
+
+              return (
+                <div
+                  key={cat.id ?? cat.name}
+                  {...dragProps}
+                  className={[
+                    "group relative flex flex-col gap-2 rounded-xl border bg-card p-2 cursor-grab active:cursor-grabbing transition-all duration-150 select-none",
+                    isOver
+                      ? "border-primary shadow-lg shadow-primary/20 scale-[1.02]"
+                      : "border-border",
+                    isDragged ? "opacity-40 scale-95" : "opacity-100",
+                  ].join(" ")}
+                  style={{ touchAction: "none" }}
+                >
+                  {/* Drag handle badge */}
+                  <div className="absolute top-2 left-2 z-10 flex items-center justify-center rounded bg-background/80 p-1 opacity-0 group-hover:opacity-100 transition-opacity backdrop-blur-sm pointer-events-none">
+                    <GripVertical className="h-3.5 w-3.5 text-muted-foreground" />
+                  </div>
+
+                  <div className="relative aspect-[4/3] w-full overflow-hidden rounded-lg bg-muted">
+                    {cat.image ? (
+                      <img src={cat.image} alt={cat.name} className="h-full w-full object-cover" />
+                    ) : (
+                      <div className="flex h-full items-center justify-center text-muted-foreground">
+                        <ImageIcon className="h-6 w-6 opacity-20" />
+                      </div>
+                    )}
+                    <div className="absolute right-2 top-2 flex gap-1">
+                      <button
+                        onClick={() => handleEditCategoryClick(cat)}
+                        className="grid place-items-center rounded bg-background/90 p-1.5 text-foreground backdrop-blur-sm hover:bg-background"
+                        onMouseDown={(e) => e.stopPropagation()}
+                      >
+                        <Edit2 className="h-3.5 w-3.5" />
+                      </button>
+                      <button
+                        onClick={() => handleDeleteCategory(cat)}
+                        className="grid place-items-center rounded bg-destructive/90 p-1.5 text-destructive-foreground backdrop-blur-sm hover:bg-destructive"
+                        onMouseDown={(e) => e.stopPropagation()}
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </button>
                     </div>
-                  )}
-                  <div className="absolute right-2 top-2 flex gap-1">
-                    <button
-                      onClick={() => handleEditCategoryClick(cat)}
-                      className="grid place-items-center rounded bg-background/90 p-1.5 text-foreground backdrop-blur-sm hover:bg-background"
-                    >
-                      <Edit2 className="h-3.5 w-3.5" />
-                    </button>
-                    <button
-                      onClick={() => handleDeleteCategory(cat)}
-                      className="grid place-items-center rounded bg-destructive/90 p-1.5 text-destructive-foreground backdrop-blur-sm hover:bg-destructive"
-                    >
-                      <Trash2 className="h-3.5 w-3.5" />
-                    </button>
+                  </div>
+                  <div className="px-1 pb-1">
+                    <span className="font-semibold text-sm">{cat.name}</span>
                   </div>
                 </div>
-                <div className="px-1 pb-1">
-                  <span className="font-semibold text-sm">{cat.name}</span>
-                </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </div>
@@ -313,7 +448,14 @@ export function MenuManager() {
       {/* Products grid */}
       <div className="flex-1 flex flex-col overflow-hidden">
         <div className="flex items-center justify-between border-b border-border bg-card px-5 py-3">
-          <h3 className="font-semibold">{effectiveCategory || "—"}</h3>
+          <div className="flex items-center gap-3">
+            <h3 className="font-semibold">{effectiveCategory || "—"}</h3>
+            {reordering && (
+              <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                <Loader2 className="h-3 w-3 animate-spin" /> Enregistrement…
+              </span>
+            )}
+          </div>
           <button
             onClick={() => { setIsEditing(null); setShowProductForm(true); }}
             disabled={!effectiveCategory}
@@ -360,47 +502,81 @@ export function MenuManager() {
               <Loader2 className="h-4 w-4 animate-spin" /> Chargement…
             </div>
           ) : (
-            <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-4">
-              {products.filter(p => p.category === effectiveCategory).map(prod => (
-                <div key={prod.id} className="group flex flex-col gap-3 rounded-xl border border-border p-3 bg-card">
-                  <div className="relative aspect-video w-full overflow-hidden rounded-lg bg-muted">
-                    {prod.image ? (
-                      <img src={prod.image} alt={prod.name} className="h-full w-full object-cover" />
-                    ) : (
-                      <div className="flex h-full items-center justify-center text-muted-foreground">
-                        <ImageIcon className="h-8 w-8 opacity-20" />
-                      </div>
-                    )}
-                    <div className="absolute right-2 top-2 flex gap-1">
-                      <button
-                        onClick={() => { setIsEditing(prod); setShowProductForm(true); }}
-                        className="grid place-items-center rounded bg-background/90 p-1.5 backdrop-blur-sm hover:bg-background"
-                      >
-                        <Edit2 className="h-4 w-4" />
-                      </button>
-                      <button
-                        onClick={() => handleDeleteProduct(prod.id)}
-                        className="grid place-items-center rounded bg-destructive/90 p-1.5 text-destructive-foreground backdrop-blur-sm hover:bg-destructive"
-                      >
-                        <Trash2 className="h-4 w-4" />
-                      </button>
-                    </div>
-                  </div>
-                  <div>
-                    <h3 className="font-semibold">{prod.name}</h3>
-                    <p className="text-sm font-bold text-primary">{prod.price} DA</p>
-                    <span className={`text-xs font-medium ${prod.available ? "text-green-600" : "text-destructive"}`}>
-                      {prod.available ? "Disponible" : "Indisponible"}
-                    </span>
-                  </div>
-                </div>
-              ))}
-              {products.filter(p => p.category === effectiveCategory).length === 0 && effectiveCategory && (
-                <p className="col-span-full text-sm text-muted-foreground">
-                  Aucun produit dans cette catégorie.
+            <>
+              {/* Drag hint */}
+              {filteredProducts.length > 1 && (
+                <p className="flex items-center gap-1.5 text-xs text-muted-foreground mb-3">
+                  <GripVertical className="h-3.5 w-3.5" />
+                  Glissez les cartes pour réorganiser l'ordre des produits
                 </p>
               )}
-            </div>
+              <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-4">
+                {filteredProducts.map(prod => {
+                  const dragProps = prodDrag.getProps(prod.id);
+                  const isOver = prodDrag.dragOverId === prod.id && prodDrag.draggedId.current !== prod.id;
+                  const isDragged = prodDrag.draggedId.current === prod.id;
+
+                  return (
+                    <div
+                      key={prod.id}
+                      {...dragProps}
+                      className={[
+                        "group flex flex-col gap-3 rounded-xl border p-3 bg-card cursor-grab active:cursor-grabbing transition-all duration-150 select-none",
+                        isOver
+                          ? "border-primary shadow-lg shadow-primary/20 scale-[1.02]"
+                          : "border-border",
+                        isDragged ? "opacity-40 scale-95" : "opacity-100",
+                      ].join(" ")}
+                      style={{ touchAction: "none" }}
+                    >
+                      <div className="relative aspect-video w-full overflow-hidden rounded-lg bg-muted">
+                        {prod.image ? (
+                          <img src={prod.image} alt={prod.name} className="h-full w-full object-cover" />
+                        ) : (
+                          <div className="flex h-full items-center justify-center text-muted-foreground">
+                            <ImageIcon className="h-8 w-8 opacity-20" />
+                          </div>
+                        )}
+
+                        {/* Drag handle */}
+                        <div className="absolute top-2 left-2 flex items-center justify-center rounded bg-background/80 p-1 opacity-0 group-hover:opacity-100 transition-opacity backdrop-blur-sm pointer-events-none">
+                          <GripVertical className="h-3.5 w-3.5 text-muted-foreground" />
+                        </div>
+
+                        <div className="absolute right-2 top-2 flex gap-1">
+                          <button
+                            onClick={() => { setIsEditing(prod); setShowProductForm(true); }}
+                            className="grid place-items-center rounded bg-background/90 p-1.5 backdrop-blur-sm hover:bg-background"
+                            onMouseDown={(e) => e.stopPropagation()}
+                          >
+                            <Edit2 className="h-4 w-4" />
+                          </button>
+                          <button
+                            onClick={() => handleDeleteProduct(prod.id)}
+                            className="grid place-items-center rounded bg-destructive/90 p-1.5 text-destructive-foreground backdrop-blur-sm hover:bg-destructive"
+                            onMouseDown={(e) => e.stopPropagation()}
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </button>
+                        </div>
+                      </div>
+                      <div>
+                        <h3 className="font-semibold">{prod.name}</h3>
+                        <p className="text-sm font-bold text-primary">{prod.price} DA</p>
+                        <span className={`text-xs font-medium ${prod.available ? "text-green-600" : "text-destructive"}`}>
+                          {prod.available ? "Disponible" : "Indisponible"}
+                        </span>
+                      </div>
+                    </div>
+                  );
+                })}
+                {filteredProducts.length === 0 && effectiveCategory && (
+                  <p className="col-span-full text-sm text-muted-foreground">
+                    Aucun produit dans cette catégorie.
+                  </p>
+                )}
+              </div>
+            </>
           )}
         </div>
       </div>
@@ -648,4 +824,3 @@ function ProductForm({
     </form>
   );
 }
-
