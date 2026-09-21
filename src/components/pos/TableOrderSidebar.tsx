@@ -260,49 +260,41 @@ function OrderListDesktop({
           <div className="mt-3">
             <label className="mb-1.5 flex items-center gap-1.5 text-xs font-semibold text-muted-foreground">
               <Plus className="h-3.5 w-3.5" />
-              Suppléments globaux
+              Suppléments
             </label>
-            <Popover>
-              <PopoverTrigger asChild>
-                <button
-                  type="button"
-                  className="flex h-11 w-full items-center justify-between rounded-lg border border-border bg-background px-3 text-sm text-foreground hover:bg-muted/50"
-                >
-                  <span className="truncate">
-                    {activeSupplements.length > 0 
-                      ? activeSupplements.map(s => s.label).join(", ")
-                      : "Sélectionner des suppléments..."}
-                  </span>
-                  <ChevronsUpDown className="h-4 w-4 shrink-0 opacity-50" />
-                </button>
-              </PopoverTrigger>
-              <PopoverContent className="w-80 p-0" align="start">
-                <div className="max-h-64 overflow-y-auto p-2">
-                  {allSupplements.length === 0 ? (
-                    <p className="p-2 text-center text-sm text-muted-foreground">Aucun supplément configuré.</p>
-                  ) : (
-                    allSupplements.map(supp => {
-                      const isSelected = activeSupplements.some(s => s.id === supp.id);
-                      return (
-                        <div
-                          key={supp.id}
-                          onClick={() => onToggleSupplement(supp)}
-                          className="flex cursor-pointer items-center justify-between rounded-sm px-2 py-1.5 text-sm hover:bg-accent hover:text-accent-foreground"
-                        >
-                          <div className="flex items-center gap-2">
-                            <div className={`flex h-4 w-4 items-center justify-center rounded border ${isSelected ? "border-primary bg-primary text-primary-foreground" : "border-muted-foreground/30"}`}>
-                              {isSelected && <Check className="h-3 w-3" />}
-                            </div>
-                            <span>{supp.label}</span>
-                          </div>
-                          <span className="text-muted-foreground">+{formatDA(supp.price)}</span>
+            {allSupplements.length === 0 ? (
+              <p className="rounded-lg border border-dashed border-border px-3 py-2 text-xs text-muted-foreground text-center">
+                Aucun supplément configuré.
+              </p>
+            ) : (
+              <div className="space-y-1 rounded-lg border border-border bg-background p-1.5">
+                {allSupplements.map(supp => {
+                  const isSelected = activeSupplements.some(s => s.id === supp.id);
+                  return (
+                    <button
+                      key={supp.id}
+                      type="button"
+                      onClick={() => onToggleSupplement(supp)}
+                      className={`flex w-full items-center justify-between gap-2 rounded-md px-2 py-1.5 text-sm transition-colors ${
+                        isSelected
+                          ? "bg-primary/10 text-primary"
+                          : "hover:bg-muted/60 text-foreground"
+                      }`}
+                    >
+                      <div className="flex items-center gap-2 min-w-0">
+                        <div className={`flex h-4 w-4 shrink-0 items-center justify-center rounded border transition-colors ${
+                          isSelected ? "border-primary bg-primary" : "border-muted-foreground/40"
+                        }`}>
+                          {isSelected && <Check className="h-3 w-3 text-primary-foreground" />}
                         </div>
-                      );
-                    })
-                  )}
-                </div>
-              </PopoverContent>
-            </Popover>
+                        <span className="truncate font-medium">{supp.label}</span>
+                      </div>
+                      <span className="shrink-0 text-xs font-bold">+{formatDA(supp.price)}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
           </div>
         </div>
         <div className="flex items-center justify-between">
@@ -907,49 +899,41 @@ export function TableOrderSidebar({ tableId, tableNumber, mergedIds, onClose }: 
                   <div className="mt-3">
                     <label className="mb-1.5 flex items-center gap-1.5 text-xs font-semibold text-muted-foreground">
                       <Plus className="h-3.5 w-3.5" />
-                      Suppléments globaux
+                      Suppléments
                     </label>
-                    <Popover>
-                      <PopoverTrigger asChild>
-                        <button
-                          type="button"
-                          className="flex h-11 w-full items-center justify-between rounded-lg border border-border bg-background px-3 text-sm text-foreground hover:bg-muted/50"
-                        >
-                          <span className="truncate">
-                            {activeSupplements.length > 0 
-                              ? activeSupplements.map(s => s.label).join(", ")
-                              : "Sélectionner..."}
-                          </span>
-                          <ChevronsUpDown className="h-4 w-4 shrink-0 opacity-50" />
-                        </button>
-                      </PopoverTrigger>
-                      <PopoverContent className="w-[calc(100vw-24px)] max-w-sm p-0" align="center">
-                        <div className="max-h-64 overflow-y-auto p-2">
-                          {allGlobalSupplements.length === 0 ? (
-                            <p className="p-2 text-center text-sm text-muted-foreground">Aucun supplément configuré.</p>
-                          ) : (
-                            allGlobalSupplements.map(supp => {
-                              const isSelected = activeSupplements.some(s => s.id === supp.id);
-                              return (
-                                <div
-                                  key={supp.id}
-                                  onClick={() => handleToggleGlobalSupplement(supp)}
-                                  className="flex cursor-pointer items-center justify-between rounded-sm px-2 py-2 text-sm hover:bg-accent"
-                                >
-                                  <div className="flex items-center gap-3">
-                                    <div className={`flex h-5 w-5 items-center justify-center rounded border ${isSelected ? "border-primary bg-primary text-primary-foreground" : "border-muted-foreground/30"}`}>
-                                      {isSelected && <Check className="h-3.5 w-3.5" />}
-                                    </div>
-                                    <span className="font-medium">{supp.label}</span>
-                                  </div>
-                                  <span className="font-semibold text-primary">+{formatDA(supp.price)}</span>
+                    {allGlobalSupplements.length === 0 ? (
+                      <p className="rounded-lg border border-dashed border-border px-3 py-2 text-xs text-muted-foreground text-center">
+                        Aucun supplément configuré.
+                      </p>
+                    ) : (
+                      <div className="space-y-1 rounded-lg border border-border bg-background p-1.5">
+                        {allGlobalSupplements.map(supp => {
+                          const isSelected = activeSupplements.some(s => s.id === supp.id);
+                          return (
+                            <button
+                              key={supp.id}
+                              type="button"
+                              onClick={() => handleToggleGlobalSupplement(supp)}
+                              className={`flex w-full items-center justify-between gap-2 rounded-md px-2 py-2 text-sm transition-colors ${
+                                isSelected
+                                  ? "bg-primary/10 text-primary"
+                                  : "hover:bg-muted/60 text-foreground"
+                              }`}
+                            >
+                              <div className="flex items-center gap-3 min-w-0">
+                                <div className={`flex h-5 w-5 shrink-0 items-center justify-center rounded border transition-colors ${
+                                  isSelected ? "border-primary bg-primary" : "border-muted-foreground/40"
+                                }`}>
+                                  {isSelected && <Check className="h-3.5 w-3.5 text-primary-foreground" />}
                                 </div>
-                              );
-                            })
-                          )}
-                        </div>
-                      </PopoverContent>
-                    </Popover>
+                                <span className="truncate font-medium">{supp.label}</span>
+                              </div>
+                              <span className="shrink-0 text-xs font-bold text-primary">+{formatDA(supp.price)}</span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
                   </div>
                 </div>
 
