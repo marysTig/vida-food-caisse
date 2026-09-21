@@ -28,7 +28,7 @@ export const Route = createFileRoute("/emporter")({
 
 function EmporterPage() {
   const { tables: tableData, loading, updateTable, rooms } = useTableStore();
-  const { orders, orderNotes, clearOrder, _patchOrder, _patchNote } = useTableOrdersStore();
+  const { orders, orderNotes, orderSupplements, clearOrder, _patchOrder, _patchNote, _patchSupplements } = useTableOrdersStore();
   const { printers } = usePrinterStore();
   const currentUser = useSessionStore(s => s.currentUser);
 
@@ -52,7 +52,7 @@ function EmporterPage() {
         try {
           const { data, error } = await supabase
             .from("table_orders")
-            .select("items, note")
+            .select("items, note, global_supplements")
             .eq("table_id", checkoutTable.id)
             .maybeSingle();
 
@@ -66,6 +66,7 @@ function EmporterPage() {
             if (mounted) {
               _patchOrder(checkoutTable.id, data.items as CartItem[]);
               _patchNote(checkoutTable.id, data.note || "");
+              _patchSupplements(checkoutTable.id, (data.global_supplements || []) as GlobalSupplement[]);
             }
             break;
           } else if (i < retries - 1) {
@@ -130,6 +131,7 @@ function EmporterPage() {
 
   const checkoutItems = checkoutTable ? (orders[checkoutTable.id] ?? []) : [];
   const checkoutNote = checkoutTable ? (orderNotes[checkoutTable.id] ?? undefined) : undefined;
+  const checkoutSupplements = checkoutTable ? (orderSupplements[checkoutTable.id] ?? []) : [];
 
   return (
     <div className="flex h-screen overflow-hidden bg-background font-sans">
@@ -228,6 +230,7 @@ function EmporterPage() {
         tableNumber={`À EMPORTER — Commande #${checkoutTable?.number}`}
         items={checkoutItems}
         {...(checkoutNote ? { orderNote: checkoutNote } : {})}
+        globalSupplements={checkoutSupplements}
         onClose={() => setCheckoutTable(null)}
         onConfirm={handleQuickCheckout}
       />

@@ -229,7 +229,7 @@ function MergedTableLines({ tables }: { tables: TableItem[] }) {
 // ── TablesPage ───────────────────────────────────────────────────────────────
 function TablesPage() {
   const { tables: tableData, loading: tablesLoading, updateTable, rooms, addRoom, addTable, mergeTablesDB } = useTableStore();
-  const { orders, orderNotes, clearOrder, mergeOrders, _patchOrder, _patchNote } = useTableOrdersStore();
+  const { orders, orderNotes, orderSupplements, clearOrder, mergeOrders, _patchOrder, _patchNote, _patchSupplements } = useTableOrdersStore();
   const currentUser = useSessionStore((s) => s.currentUser);
   const { printers } = usePrinterStore();
 
@@ -258,7 +258,7 @@ function TablesPage() {
         try {
           const { data, error } = await supabase
             .from("table_orders")
-            .select("items, note")
+            .select("items, note, global_supplements")
             .eq("table_id", checkoutTable.id)
             .maybeSingle();
 
@@ -272,6 +272,7 @@ function TablesPage() {
             if (mounted) {
               _patchOrder(checkoutTable.id, data.items as CartItem[]);
               _patchNote(checkoutTable.id, data.note || "");
+              _patchSupplements(checkoutTable.id, (data.global_supplements || []) as GlobalSupplement[]);
             }
             break;
           } else if (i < retries - 1) {
@@ -519,17 +520,21 @@ function TablesPage() {
   // ── Computed for CheckoutReceiptModal
   let checkoutItems = checkoutTable ? (orders[checkoutTable.id] ?? []) : [];
   let checkoutNote = checkoutTable ? (orderNotes[checkoutTable.id] ?? undefined) : undefined;
+  let checkoutSupplements = checkoutTable ? (orderSupplements[checkoutTable.id] ?? []) : [];
   let checkoutTableNumber: string | number = checkoutTable?.number ?? 0;
 
   if (multiCheckoutTables.length > 0) {
     const combinedItems: any[] = [];
     const notes: string[] = [];
+    const combinedSupplements: any[] = [];
     multiCheckoutTables.forEach(id => {
       if (orders[id]) combinedItems.push(...orders[id]);
       if (orderNotes[id]) notes.push(orderNotes[id]);
+      if (orderSupplements[id]) combinedSupplements.push(...orderSupplements[id]);
     });
     checkoutItems = combinedItems;
     checkoutNote = notes.length > 0 ? notes.join(" | ") : undefined;
+    checkoutSupplements = combinedSupplements;
     const numbers = tableData
       .filter(t => multiCheckoutTables.includes(t.id))
       .map(t => t.number)
@@ -727,6 +732,7 @@ function TablesPage() {
         tableNumber={checkoutTableNumber}
         items={checkoutItems}
         {...(checkoutNote ? { orderNote: checkoutNote } : {})}
+        globalSupplements={checkoutSupplements}
         onClose={() => {
           setCheckoutTable(null);
           setMultiCheckoutTables([]);
