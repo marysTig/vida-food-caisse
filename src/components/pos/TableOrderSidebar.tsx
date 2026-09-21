@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, useCallback, useRef } from "react";
-import { Minus, Plus, ShoppingCart, Trash2, X, CheckCircle2, CreditCard, NotebookPen } from "lucide-react";
+import { Minus, Plus, ShoppingCart, Trash2, X, CheckCircle2, CreditCard, NotebookPen, ChevronsUpDown, Check } from "lucide-react";
 import { CategoryTabs } from "./CategoryTabs";
 import { ProductGrid } from "./ProductGrid";
 import { ProductSearch } from "./ProductSearch";
@@ -19,6 +19,8 @@ import { sendKitchenBroadcast } from "@/lib/kitchenPrintSender";
 import { toast } from "sonner";
 import { ComponentLoader } from "@/components/ui/PageLoader";
 import { recordZReport } from "@/lib/zReport";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { useGlobalSupplementsStore, type GlobalSupplement } from "@/lib/globalSupplementsStore";
 
 // ── Guard anti-double-impression cuisine ──────────────────────────────────────
 // Set module-level (singleton pour toute la durée de la session JS).
@@ -155,11 +157,14 @@ type OrderListDesktopProps = {
   onNoteChange: (note: string) => void;
   onValidate: () => void;
   onCheckout: () => void;
+  allSupplements: GlobalSupplement[];
+  activeSupplements: GlobalSupplement[];
+  onToggleSupplement: (supp: GlobalSupplement) => void;
 };
 
-function OrderListDesktop({
   tableNumber, mergedNumbers, items, orderNote, itemCount, total,
   isOccupied, isServeur, decrease, increase, remove, onNoteChange, onValidate, onCheckout,
+  allSupplements, activeSupplements, onToggleSupplement
 }: OrderListDesktopProps) {
   return (
     <div className="flex h-full flex-col">
@@ -249,6 +254,54 @@ function OrderListDesktop({
             Note de commande
           </label>
           <OrderNoteInput value={orderNote} onChange={onNoteChange} />
+
+          <div className="mt-3">
+            <label className="mb-1.5 flex items-center gap-1.5 text-xs font-semibold text-muted-foreground">
+              <Plus className="h-3.5 w-3.5" />
+              Suppléments globaux
+            </label>
+            <Popover>
+              <PopoverTrigger asChild>
+                <button
+                  type="button"
+                  className="flex h-11 w-full items-center justify-between rounded-lg border border-border bg-background px-3 text-sm text-foreground hover:bg-muted/50"
+                >
+                  <span className="truncate">
+                    {activeSupplements.length > 0 
+                      ? activeSupplements.map(s => s.label).join(", ")
+                      : "Sélectionner des suppléments..."}
+                  </span>
+                  <ChevronsUpDown className="h-4 w-4 shrink-0 opacity-50" />
+                </button>
+              </PopoverTrigger>
+              <PopoverContent className="w-80 p-0" align="start">
+                <div className="max-h-64 overflow-y-auto p-2">
+                  {allSupplements.length === 0 ? (
+                    <p className="p-2 text-center text-sm text-muted-foreground">Aucun supplément configuré.</p>
+                  ) : (
+                    allSupplements.map(supp => {
+                      const isSelected = activeSupplements.some(s => s.id === supp.id);
+                      return (
+                        <div
+                          key={supp.id}
+                          onClick={() => onToggleSupplement(supp)}
+                          className="flex cursor-pointer items-center justify-between rounded-sm px-2 py-1.5 text-sm hover:bg-accent hover:text-accent-foreground"
+                        >
+                          <div className="flex items-center gap-2">
+                            <div className={`flex h-4 w-4 items-center justify-center rounded border ${isSelected ? "border-primary bg-primary text-primary-foreground" : "border-muted-foreground/30"}`}>
+                              {isSelected && <Check className="h-3 w-3" />}
+                            </div>
+                            <span>{supp.label}</span>
+                          </div>
+                          <span className="text-muted-foreground">+{formatDA(supp.price)}</span>
+                        </div>
+                      );
+                    })
+                  )}
+                </div>
+              </PopoverContent>
+            </Popover>
+          </div>
         </div>
         <div className="flex items-center justify-between">
           <span className="text-sm text-muted-foreground">
@@ -370,14 +423,18 @@ export function TableOrderSidebar({ tableId, tableNumber, mergedIds, onClose }: 
     ? mergedIds.map(id => tables.find(t => t.id === id)?.number).filter(Boolean).join(", ")
     : null;
 
-  const { orders, orderNotes, setOrder, setOrderNote, flushOrder, clearOrder, _patchOrder, _patchNote } = useTableOrdersStore();
+  const { orders, orderNotes, orderSupplements, setOrder, setOrderNote, setOrderSupplements, flushOrder, clearOrder, _patchOrder, _patchNote, _patchSupplements } = useTableOrdersStore();
+  const { supplements: allGlobalSupplements } = useGlobalSupplementsStore();
 
   const [category, setCategory] = useState<Category>("Tous");
   const [query, setQuery] = useState("");
 
-  // Get items and note directly from store to ensure Realtime updates are visible immediately
   const items = orders[tableId] || [];
   const orderNote = orderNotes[tableId] || "";
+  const activeSupplements = orderSupplements[tableId] || [];
+  const supplementsTotal = activeSupplements.reduce((sum, s) => sum + s.price, 0);
+  const cartBaseTotal = cartSubtotal(items);
+  const total = cartBaseTotal + supplementsTotal;
 
   const [editing, setEditing] = useState<CartItem | null>(null);
   const [modifierOpen, setModifierOpen] = useState(false);
@@ -417,6 +474,9 @@ export function TableOrderSidebar({ tableId, tableNumber, mergedIds, onClose }: 
               if (mounted) {
                 _patchOrder(tableId, data.items as CartItem[]);
                 _patchNote(tableId, data.note || "");
+                // Pour compatibilité avec les anciennes données qui n'ont peut-être pas la colonne:
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                _patchSupplements(tableId, ((data as any).global_supplements as GlobalSupplement[]) || []);
               }
               break; // Succès, on arrête les retries
             } else if (i < retries - 1) {
@@ -438,7 +498,7 @@ export function TableOrderSidebar({ tableId, tableNumber, mergedIds, onClose }: 
     return () => {
       mounted = false;
     };
-  }, [tableId, isOccupied, isServeur, _patchOrder, _patchNote]);
+  }, [tableId, isOccupied, isServeur, _patchOrder, _patchNote, _patchSupplements]);
 
 
 
@@ -532,7 +592,6 @@ export function TableOrderSidebar({ tableId, tableNumber, mergedIds, onClose }: 
     await flushOrder(tableId);
     console.log("[SERVER ORDER] table_orders saved");
 
-    const total = cartSubtotal(items);
     const now = new Date().toISOString();
     await updateTable(tableId, {
       status: "occupee",
@@ -621,11 +680,11 @@ export function TableOrderSidebar({ tableId, tableNumber, mergedIds, onClose }: 
   const handleCheckout = async () => {
     // --- SAUVEGARDE DES DONNEES POUR IMPRESSION ---
     const itemsToPrint = [...items];
-    const totalToPrint = cartSubtotal(itemsToPrint);
+    const totalToPrint = total;
     // ----------------------------------------------
 
     // Enregistrer dans l'historique du Rapport Z
-    recordZReport(itemsToPrint, "table", tableNumber);
+    recordZReport(itemsToPrint, "table", tableNumber, activeSupplements);
 
     // 1. Clear items + note
     clearOrder(tableId);
@@ -671,12 +730,19 @@ export function TableOrderSidebar({ tableId, tableNumber, mergedIds, onClose }: 
     onClose();
   };
 
-  const total = cartSubtotal(items);
   const itemCount = items.reduce((s, i) => s + i.quantity, 0);
 
   // Stable callbacks pour les sous-composants
   const handleOpenCheckout = useCallback(() => setCheckoutOpen(true), []);
   const handleNoteChange = useCallback((note: string) => setOrderNote(tableId, note), [tableId, setOrderNote]);
+  const handleToggleGlobalSupplement = useCallback((supp: GlobalSupplement) => {
+    const isSelected = activeSupplements.some((s) => s.id === supp.id);
+    if (isSelected) {
+      setOrderSupplements(tableId, activeSupplements.filter((s) => s.id !== supp.id));
+    } else {
+      setOrderSupplements(tableId, [...activeSupplements, supp]);
+    }
+  }, [tableId, activeSupplements, setOrderSupplements]);
 
   return (
     <div className="fixed inset-0 z-[100] flex justify-end bg-black/40">
@@ -714,6 +780,9 @@ export function TableOrderSidebar({ tableId, tableNumber, mergedIds, onClose }: 
             onNoteChange={handleNoteChange}
             onValidate={handleValidateOrder}
             onCheckout={handleOpenCheckout}
+            allSupplements={allGlobalSupplements}
+            activeSupplements={activeSupplements}
+            onToggleSupplement={handleToggleGlobalSupplement}
           />
         </div>
 
@@ -827,6 +896,54 @@ export function TableOrderSidebar({ tableId, tableNumber, mergedIds, onClose }: 
                     Note de commande
                   </label>
                   <OrderNoteInput value={orderNote} onChange={handleNoteChange} />
+
+                  <div className="mt-3">
+                    <label className="mb-1.5 flex items-center gap-1.5 text-xs font-semibold text-muted-foreground">
+                      <Plus className="h-3.5 w-3.5" />
+                      Suppléments globaux
+                    </label>
+                    <Popover>
+                      <PopoverTrigger asChild>
+                        <button
+                          type="button"
+                          className="flex h-11 w-full items-center justify-between rounded-lg border border-border bg-background px-3 text-sm text-foreground hover:bg-muted/50"
+                        >
+                          <span className="truncate">
+                            {activeSupplements.length > 0 
+                              ? activeSupplements.map(s => s.label).join(", ")
+                              : "Sélectionner..."}
+                          </span>
+                          <ChevronsUpDown className="h-4 w-4 shrink-0 opacity-50" />
+                        </button>
+                      </PopoverTrigger>
+                      <PopoverContent className="w-[calc(100vw-24px)] max-w-sm p-0" align="center">
+                        <div className="max-h-64 overflow-y-auto p-2">
+                          {allGlobalSupplements.length === 0 ? (
+                            <p className="p-2 text-center text-sm text-muted-foreground">Aucun supplément configuré.</p>
+                          ) : (
+                            allGlobalSupplements.map(supp => {
+                              const isSelected = activeSupplements.some(s => s.id === supp.id);
+                              return (
+                                <div
+                                  key={supp.id}
+                                  onClick={() => handleToggleGlobalSupplement(supp)}
+                                  className="flex cursor-pointer items-center justify-between rounded-sm px-2 py-2 text-sm hover:bg-accent"
+                                >
+                                  <div className="flex items-center gap-3">
+                                    <div className={`flex h-5 w-5 items-center justify-center rounded border ${isSelected ? "border-primary bg-primary text-primary-foreground" : "border-muted-foreground/30"}`}>
+                                      {isSelected && <Check className="h-3.5 w-3.5" />}
+                                    </div>
+                                    <span className="font-medium">{supp.label}</span>
+                                  </div>
+                                  <span className="font-semibold text-primary">+{formatDA(supp.price)}</span>
+                                </div>
+                              );
+                            })
+                          )}
+                        </div>
+                      </PopoverContent>
+                    </Popover>
+                  </div>
                 </div>
 
                 {/* Bouton valider / encaisser */}
@@ -882,6 +999,7 @@ export function TableOrderSidebar({ tableId, tableNumber, mergedIds, onClose }: 
         tableNumber={tableNumber}
         items={items}
         orderNote={orderNote || undefined}
+        globalSupplements={activeSupplements}
         onClose={() => setCheckoutOpen(false)}
         onConfirm={async () => {
           setCheckoutOpen(false);

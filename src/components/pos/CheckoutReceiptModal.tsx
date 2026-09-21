@@ -9,12 +9,14 @@ import {
 } from "lucide-react";
 import { type CartItem, lineTotal, cartSubtotal } from "@/lib/cart";
 import { formatDA } from "@/data/menu";
+import { type GlobalSupplement } from "@/lib/globalSupplementsStore";
 
 type CheckoutReceiptModalProps = {
   open: boolean;
   tableNumber: number | string;
   items: CartItem[];
   orderNote?: string | undefined;
+  globalSupplements: GlobalSupplement[];
   onClose: () => void;
   onConfirm: () => void;
 };
@@ -24,11 +26,13 @@ export function CheckoutReceiptModal({
   tableNumber,
   items,
   orderNote,
+  globalSupplements,
   onClose,
   onConfirm,
 }: CheckoutReceiptModalProps) {
   const confirmRef = useRef<HTMLButtonElement>(null);
-  const subtotal = cartSubtotal(items);
+  const supplementsTotal = globalSupplements.reduce((sum, s) => sum + s.price, 0);
+  const subtotal = cartSubtotal(items) + supplementsTotal;
   const itemCount = items.reduce((s, i) => s + i.quantity, 0);
 
   // Fermer avec Escape
@@ -193,6 +197,21 @@ export function CheckoutReceiptModal({
             <div className="mx-5 mb-4 mt-2 flex items-start gap-2 rounded-xl border border-border bg-muted/50 px-4 py-3">
               <NotebookPen className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-foreground" />
               <p className="text-xs italic text-muted-foreground">{orderNote}</p>
+            </div>
+          )}
+
+          {/* Suppléments globaux */}
+          {globalSupplements.length > 0 && (
+            <div className="mx-5 mb-4 mt-2 rounded-xl border border-border bg-primary/5 px-4 py-3">
+              <p className="mb-2 text-xs font-semibold text-primary">Suppléments globaux</p>
+              <div className="space-y-1.5">
+                {globalSupplements.map(supp => (
+                  <div key={supp.id} className="flex items-center justify-between text-sm">
+                    <span className="text-foreground">{supp.label}</span>
+                    <span className="font-semibold text-primary">+{formatDA(supp.price)}</span>
+                  </div>
+                ))}
+              </div>
             </div>
           )}
         </div>

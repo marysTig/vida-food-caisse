@@ -1,5 +1,5 @@
-import { type CartItem, lineTotal } from "@/lib/cart";
 import { formatDA } from "@/data/menu";
+import { type GlobalSupplement } from "@/lib/globalSupplementsStore";
 import { type Printer } from "@/lib/printerStore";
 
 declare global {
@@ -225,7 +225,7 @@ export const printerService = {
     await this.sendData(printer, this.encodeText(ticket));
   },
 
-  async printReceipt(printer: Printer, items: CartItem[], total: number, tableNumber?: string | number): Promise<void> {
+  async printReceipt(printer: Printer, items: CartItem[], total: number, tableNumber?: string | number, globalSupplements?: GlobalSupplement[]): Promise<void> {
     if (!this.isNativePlatform() && !this.isConnected(printer.id)) {
       throw new Error("L'imprimante n'est pas connectée. Veuillez la reconnecter (Web Bluetooth).");
     }
@@ -321,6 +321,14 @@ export const printerService = {
       }
     }
 
+    if (globalSupplements && globalSupplements.length > 0) {
+      ticket += SEP;
+      ticket += ALIGN_LEFT + BOLD_ON + "Suppléments globaux :\n" + BOLD_OFF;
+      for (const supp of globalSupplements) {
+        ticket += justify(`+ ${supp.label}`, formatNumber(supp.price)) + "\n";
+      }
+    }
+
     ticket += SEP;
 
     // --- TOTAUX ---
@@ -339,7 +347,7 @@ export const printerService = {
     await this.sendData(printer, this.encodeText(ticket));
   },
 
-  async printKitchen(printer: Printer, items: CartItem[], orderNumber: string | number, orderNote?: string): Promise<void> {
+  async printKitchen(printer: Printer, items: CartItem[], orderNumber: string | number, orderNote?: string, globalSupplements?: GlobalSupplement[]): Promise<void> {
     if (!this.isNativePlatform() && !this.isConnected(printer.id)) {
       throw new Error("L'imprimante n'est pas connectée. Veuillez la reconnecter (Web Bluetooth).");
     }
@@ -392,10 +400,18 @@ export const printerService = {
       ticket += SEP;
     }
 
-    // ── Note globale de commande ────────────────────────
+    // ── Note globale et suppléments ────────────────────────
+    let globalNotes = "";
+    if (globalSupplements && globalSupplements.length > 0) {
+      globalNotes += `Suppléments : ${globalSupplements.map(s => s.label).join(", ")}\n`;
+    }
     if (orderNote) {
+      globalNotes += `NOTE : ${orderNote}\n`;
+    }
+
+    if (globalNotes) {
       ticket += LF;
-      ticket += ALIGN_CENTER + BOLD_ON + `NOTE : ${orderNote}\n` + BOLD_OFF;
+      ticket += ALIGN_CENTER + BOLD_ON + globalNotes + BOLD_OFF;
     }
 
     ticket += "\n\n\n\n";

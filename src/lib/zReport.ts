@@ -2,12 +2,15 @@ import { supabase } from "./supabase";
 import { type CartItem } from "./cart";
 import { toast } from "sonner";
 
+import { type GlobalSupplement } from "./globalSupplementsStore";
+
 export async function recordZReport(
   items: CartItem[],
   orderType: "table" | "emporter",
-  orderOrTableNumber: string | number
+  orderOrTableNumber: string | number,
+  globalSupplements: GlobalSupplement[] = []
 ) {
-  if (items.length === 0) return;
+  if (items.length === 0 && globalSupplements.length === 0) return;
 
   const cashoutDate = new Date().toISOString();
 
@@ -37,8 +40,26 @@ export async function recordZReport(
     };
   });
 
+  const supplementRows = globalSupplements.map((supp) => ({
+    product_id: `supp-${supp.id}`,
+    product_name: `Supplément: ${supp.label}`,
+    quantity: 1,
+    unit_price: supp.price,
+    variant_price: null,
+    variant_name: null,
+    line_total: supp.price,
+    cashout_date: cashoutDate,
+    order_type: orderType,
+    table_number: orderType === "table" ? String(orderOrTableNumber) : null,
+    takeaway_number: orderType === "emporter" ? String(orderOrTableNumber) : null,
+  }));
+
+  const allRows = [...rows, ...supplementRows];
+
+  if (allRows.length === 0) return;
+
   try {
-    const { error } = await supabase.from("z_report_history").insert(rows);
+    const { error } = await supabase.from("z_report_history").insert(allRows);
     if (error) {
       console.error("Erreur Rapport Z:", error);
       toast.error("Rapport Z non enregistré", {
