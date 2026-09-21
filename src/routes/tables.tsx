@@ -733,9 +733,6 @@ function TablesPage() {
         }}
         onConfirm={handleQuickCheckout}
       />
-      
-      {/* Hub d'impression : Actif uniquement sur la caisse */}
-      {currentUser?.role !== 'serveur' && <KitchenPrintHub />}
     </div>
   );
 }

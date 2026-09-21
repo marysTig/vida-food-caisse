@@ -70,35 +70,25 @@ export function KitchenPrintHub() {
         // Exécution séquentielle — évite les conflits Bluetooth simultanés
         (async () => {
           for (const printer of kitchenPrinters) {
-            const hasMatchingItems = data.items.some((item) =>
-              printer.categories.includes(item.product.category)
-            );
-
             console.log(
-              `[PRINT HUB] Printer category match for ${printer.name}: ${hasMatchingItems}`
+              `[PRINT HUB] Sending to printer ${printer.name}...`
             );
-
-            if (hasMatchingItems) {
-              console.log(
-                `[PRINT HUB] Sending to printer ${printer.name}...`
+            try {
+              await printerService.printKitchen(
+                printer,
+                data.items,
+                data.tableNumber,
+                data.orderNote
               );
-              try {
-                await printerService.printKitchen(
-                  printer,
-                  data.items,
-                  data.tableNumber,
-                  data.orderNote
-                );
-                console.log(`[PRINT HUB] Print success for ${printer.name}`);
-              } catch (err: any) {
-                console.error(
-                  `[PRINT HUB] Print error on ${printer.name}:`,
-                  err
-                );
-                toast.error(`Erreur d'impression Hub (${printer.name})`, {
-                  description: `Table ${data.tableNumber} : ${err.message}`,
-                });
-              }
+              console.log(`[PRINT HUB] Print success for ${printer.name}`);
+            } catch (err: any) {
+              console.error(
+                `[PRINT HUB] Print error on ${printer.name}:`,
+                err
+              );
+              toast.error(`Erreur d'impression Hub (${printer.name})`, {
+                description: `Table ${data.tableNumber} : ${err.message}`,
+              });
             }
           }
         })();

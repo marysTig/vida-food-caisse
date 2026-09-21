@@ -10,11 +10,14 @@ import {
 import { useEffect, type ReactNode } from "react";
 import { useTableSync, getTableRealtimeManager } from "../lib/tableStore";
 import { useTableOrdersSync, getTableOrdersRealtimeManager } from "../lib/tableOrdersStore";
+import { useGlobalSupplementsSync } from "../lib/globalSupplementsStore";
 import { App as CapacitorApp } from "@capacitor/app";
 
 import appCss from "../styles.css?url";
 import { reportLovableError } from "../lib/lovable-error-reporting";
 import { PageLoader } from "../components/ui/PageLoader";
+import { KitchenPrintHub } from "../components/pos/KitchenPrintHub";
+import { useSessionStore } from "../lib/authStore";
 
 function NotFoundComponent() {
   return (
@@ -127,11 +130,13 @@ function RootShell({ children }: { children: ReactNode }) {
 
 function RootComponent() {
   const { queryClient } = Route.useRouteContext();
+  const currentUser = useSessionStore(s => s.currentUser);
 
   // Initialise le chargement et l'écoute Realtime une seule fois,
   // quelle que soit la page affichée (tables, emporter, admin…)
   useTableSync();
   useTableOrdersSync();
+  useGlobalSupplementsSync();
 
   // ── Lifecycle Capacitor Android : retour au foreground ──────────────────────
   // Quand l'app revient au premier plan, on vérifie l'état des channels
@@ -169,6 +174,7 @@ function RootComponent() {
     <QueryClientProvider client={queryClient}>
       {/* Required: nested routes render here. Removing <Outlet /> breaks all child routes. */}
       <Outlet />
+      {currentUser?.role !== 'serveur' && <KitchenPrintHub />}
     </QueryClientProvider>
   );
 }

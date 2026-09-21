@@ -111,11 +111,9 @@ async function _initMenuStore(
   setLoading(false);
 
   const reload = async () => {
-    setLoading(true);
     const [c, p] = await Promise.all([fetchCategoriesFromDB(), fetchProductsFromDB()]);
     setCategories(c);
     setProducts(p);
-    setLoading(false);
   };
 
   supabase
@@ -141,15 +139,13 @@ export function useMenuStore() {
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const reload = useCallback(async () => {
-    setLoading(true);
     const [cats, prods] = await Promise.all([
       fetchCategoriesFromDB(),
       fetchProductsFromDB(),
     ]);
     setCategories(cats);
     setProducts(prods);
-    setLoading(false);
-  }, [setCategories, setProducts, setLoading]);
+  }, [setCategories, setProducts]);
 
   // ── CRUD Catégories ─────────────────────────────────────────────
 
