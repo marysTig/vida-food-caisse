@@ -162,10 +162,12 @@ type OrderListDesktopProps = {
   onToggleSupplement: (supp: GlobalSupplement) => void;
 };
 
+function OrderListDesktop({
   tableNumber, mergedNumbers, items, orderNote, itemCount, total,
   isOccupied, isServeur, decrease, increase, remove, onNoteChange, onValidate, onCheckout,
   allSupplements, activeSupplements, onToggleSupplement
 }: OrderListDesktopProps) {
+
   return (
     <div className="flex h-full flex-col">
       <div className="flex items-center justify-between border-b border-border bg-card px-4 py-3">

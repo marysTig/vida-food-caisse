@@ -12,9 +12,9 @@ import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as AdminRouteImport } from './routes/admin'
 import { Route as EmporterRouteImport } from './routes/emporter'
+import { Route as MenuRouteImport } from './routes/menu'
 import { Route as ServeurRouteImport } from './routes/serveur'
 import { Route as TablesRouteImport } from './routes/tables'
-import { Route as MenuRouteImport } from './routes/menu'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -31,6 +31,11 @@ const EmporterRoute = EmporterRouteImport.update({
   path: '/emporter',
   getParentRoute: () => rootRouteImport,
 } as any)
+const MenuRoute = MenuRouteImport.update({
+  id: '/menu',
+  path: '/menu',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ServeurRoute = ServeurRouteImport.update({
   id: '/serveur',
   path: '/serveur',
@@ -39,11 +44,6 @@ const ServeurRoute = ServeurRouteImport.update({
 const TablesRoute = TablesRouteImport.update({
   id: '/tables',
   path: '/tables',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const MenuRoute = MenuRouteImport.update({
-  id: '/menu',
-  path: '/menu',
   getParentRoute: () => rootRouteImport,
 } as any)
 
@@ -77,7 +77,8 @@ export interface FileRouteTypes {
   fullPaths: '/' | '/admin' | '/emporter' | '/menu' | '/serveur' | '/tables'
   fileRoutesByTo: FileRoutesByTo
   to: '/' | '/admin' | '/emporter' | '/menu' | '/serveur' | '/tables'
-  id: '__root__' | '/' | '/admin' | '/emporter' | '/menu' | '/serveur' | '/tables'
+  id:
+    '__root__' | '/' | '/admin' | '/emporter' | '/menu' | '/serveur' | '/tables'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
