@@ -123,15 +123,15 @@ function MenuPublicPage() {
                 </div>
 
                 {/* Contenu */}
-                <div className="flex flex-1 flex-col p-2.5 min-[380px]:p-3 md:p-4 min-w-0">
+                <div className="flex flex-1 flex-col items-center p-2.5 min-[380px]:p-3 md:p-4 min-w-0 text-center">
                   {/* Nom du produit */}
-                  <h3 className="text-sm min-[380px]:text-sm md:text-base font-bold leading-tight break-words hyphens-auto">
+                  <h3 className="text-sm min-[380px]:text-sm md:text-base font-bold leading-snug whitespace-normal break-words w-full">
                     {product.name}
                   </h3>
 
                   {/* Prix (sans variantes) */}
                   {(!product.options || product.options.length === 0) && (
-                    <span className="mt-1.5 self-start rounded-md bg-primary/10 px-2 py-0.5 text-xs md:text-sm font-extrabold text-primary">
+                    <span className="mt-1.5 rounded-md bg-primary/10 px-2 py-0.5 text-xs md:text-sm font-extrabold text-primary inline-block">
                       {formatDA(product.price)}
                     </span>
                   )}
