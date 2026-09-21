@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, useCallback, useRef } from "react";
-import { Minus, Plus, ShoppingCart, Trash2, X, CheckCircle2, CreditCard, NotebookPen, ChevronsUpDown, Check } from "lucide-react";
+import { Minus, Plus, ShoppingCart, Trash2, X, CheckCircle2, CreditCard, NotebookPen, ChevronsUpDown, Check, ChevronDown } from "lucide-react";
 import { CategoryTabs } from "./CategoryTabs";
 import { ProductGrid } from "./ProductGrid";
 import { ProductSearch } from "./ProductSearch";
@@ -167,6 +167,7 @@ function OrderListDesktop({
   isOccupied, isServeur, decrease, increase, remove, onNoteChange, onValidate, onCheckout,
   allSupplements, activeSupplements, onToggleSupplement
 }: OrderListDesktopProps) {
+  const [supplementsOpen, setSupplementsOpen] = useState(false);
 
   return (
     <div className="flex h-full flex-col">
@@ -258,16 +259,29 @@ function OrderListDesktop({
           <OrderNoteInput value={orderNote} onChange={onNoteChange} />
 
           <div className="mt-3">
-            <label className="mb-1.5 flex items-center gap-1.5 text-xs font-semibold text-muted-foreground">
-              <Plus className="h-3.5 w-3.5" />
-              Suppléments
-            </label>
-            {allSupplements.length === 0 ? (
-              <p className="rounded-lg border border-dashed border-border px-3 py-2 text-xs text-muted-foreground text-center">
-                Aucun supplément configuré.
-              </p>
-            ) : (
-              <div className="space-y-1 rounded-lg border border-border bg-background p-1.5">
+            <button 
+              type="button" 
+              onClick={() => setSupplementsOpen(!supplementsOpen)}
+              className="mb-1.5 flex w-full items-center justify-between text-xs font-semibold text-muted-foreground transition-colors hover:text-foreground"
+            >
+              <div className="flex items-center gap-1.5">
+                <Plus className="h-3.5 w-3.5" />
+                Suppléments {activeSupplements.length > 0 && (
+                  <span className="rounded-full bg-primary/20 px-1.5 py-0.5 text-[9px] font-bold text-primary">
+                    {activeSupplements.length}
+                  </span>
+                )}
+              </div>
+              <ChevronDown className={`h-4 w-4 transition-transform ${supplementsOpen ? "rotate-180" : ""}`} />
+            </button>
+            
+            {supplementsOpen && (
+              allSupplements.length === 0 ? (
+                <p className="rounded-lg border border-dashed border-border px-3 py-2 text-xs text-muted-foreground text-center mt-2">
+                  Aucun supplément configuré.
+                </p>
+              ) : (
+                <div className="mt-2 space-y-1 rounded-lg border border-border bg-background p-1.5 shadow-sm">
                 {allSupplements.map(supp => {
                   const isSelected = activeSupplements.some(s => s.id === supp.id);
                   return (
@@ -294,6 +308,7 @@ function OrderListDesktop({
                   );
                 })}
               </div>
+              )
             )}
           </div>
         </div>
@@ -433,6 +448,7 @@ export function TableOrderSidebar({ tableId, tableNumber, mergedIds, onClose }: 
   const [editing, setEditing] = useState<CartItem | null>(null);
   const [modifierOpen, setModifierOpen] = useState(false);
   const [optionProduct, setOptionProduct] = useState<Product | null>(null);
+  const [supplementsOpen, setSupplementsOpen] = useState(false);
   const [checkoutOpen, setCheckoutOpen] = useState(false);
 
   // Mobile: panier ouvert ou fermé (bottom panel)
@@ -897,16 +913,29 @@ export function TableOrderSidebar({ tableId, tableNumber, mergedIds, onClose }: 
                   <OrderNoteInput value={orderNote} onChange={handleNoteChange} />
 
                   <div className="mt-3">
-                    <label className="mb-1.5 flex items-center gap-1.5 text-xs font-semibold text-muted-foreground">
-                      <Plus className="h-3.5 w-3.5" />
-                      Suppléments
-                    </label>
-                    {allGlobalSupplements.length === 0 ? (
-                      <p className="rounded-lg border border-dashed border-border px-3 py-2 text-xs text-muted-foreground text-center">
-                        Aucun supplément configuré.
-                      </p>
-                    ) : (
-                      <div className="space-y-1 rounded-lg border border-border bg-background p-1.5">
+                    <button 
+                      type="button" 
+                      onClick={() => setSupplementsOpen(!supplementsOpen)}
+                      className="mb-1.5 flex w-full items-center justify-between text-xs font-semibold text-muted-foreground transition-colors hover:text-foreground"
+                    >
+                      <div className="flex items-center gap-1.5">
+                        <Plus className="h-3.5 w-3.5" />
+                        Suppléments {activeSupplements.length > 0 && (
+                          <span className="rounded-full bg-primary/20 px-1.5 py-0.5 text-[9px] font-bold text-primary">
+                            {activeSupplements.length}
+                          </span>
+                        )}
+                      </div>
+                      <ChevronDown className={`h-4 w-4 transition-transform ${supplementsOpen ? "rotate-180" : ""}`} />
+                    </button>
+                    
+                    {supplementsOpen && (
+                      allGlobalSupplements.length === 0 ? (
+                        <p className="rounded-lg border border-dashed border-border px-3 py-2 text-xs text-muted-foreground text-center mt-2">
+                          Aucun supplément configuré.
+                        </p>
+                      ) : (
+                        <div className="mt-2 space-y-1 rounded-lg border border-border bg-background p-1.5 shadow-sm">
                         {allGlobalSupplements.map(supp => {
                           const isSelected = activeSupplements.some(s => s.id === supp.id);
                           return (
@@ -933,6 +962,7 @@ export function TableOrderSidebar({ tableId, tableNumber, mergedIds, onClose }: 
                           );
                         })}
                       </div>
+                      )
                     )}
                   </div>
                 </div>

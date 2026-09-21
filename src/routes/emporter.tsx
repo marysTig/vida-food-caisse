@@ -18,6 +18,7 @@ import { toast } from "sonner";
 import { KitchenPrintHub } from "@/components/pos/KitchenPrintHub";
 import { useSessionStore } from "@/lib/authStore";
 import { recordZReport } from "@/lib/zReport";
+import { type GlobalSupplement } from "@/lib/globalSupplementsStore";
 
 export const Route = createFileRoute("/emporter")({
   head: () => ({

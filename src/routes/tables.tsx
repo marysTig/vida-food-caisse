@@ -21,6 +21,7 @@ import { UserLogin } from "@/components/auth/UserLogin";
 import { ComponentLoader } from "@/components/ui/PageLoader";
 import { KitchenPrintHub } from "@/components/pos/KitchenPrintHub";
 import { recordZReport } from "@/lib/zReport";
+import { type GlobalSupplement } from "@/lib/globalSupplementsStore";
 
 export const Route = createFileRoute("/tables")({
   head: () => ({
