@@ -503,7 +503,7 @@ function TablesPage() {
     try {
       const cashierPrinters = printers.filter(p => p.enabled && p.type === "caisse");
       for (const printer of cashierPrinters) {
-        printerService.printReceipt(printer, itemsToPrint, totalToPrint, tableNumber).catch(err => {
+        printerService.printReceipt(printer, itemsToPrint, totalToPrint, tableNumber, checkoutSupplements).catch(err => {
           console.error("Erreur d'impression caisse:", err);
           toast.error("Erreur d'impression caisse", { description: err.message });
         });

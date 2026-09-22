@@ -98,6 +98,7 @@ function EmporterPage() {
     
     // Récupérer les items avant de clear
     const itemsToPrint = orders[checkoutTable.id] || [];
+    const supplementsToPrint = orderSupplements[checkoutTable.id] || [];
     
     // Enregistrer dans l'historique du Rapport Z
     recordZReport(itemsToPrint, "emporter", checkoutTable.number);
@@ -117,7 +118,7 @@ function EmporterPage() {
         toast.warning("Aucune imprimante de caisse configurée.");
       }
       for (const printer of cashierPrinters) {
-        printerService.printReceipt(printer, itemsToPrint, cartSubtotal(itemsToPrint), `À EMPORTER — Commande #${checkoutTable.number}`).catch(err => {
+        printerService.printReceipt(printer, itemsToPrint, cartSubtotal(itemsToPrint) + supplementsToPrint.reduce((sum, s) => sum + s.price, 0), `À EMPORTER — Commande #${checkoutTable.number}`, supplementsToPrint).catch(err => {
           console.error("Erreur d'impression caisse:", err);
           toast.error("Erreur d'impression caisse", { description: err.message });
         });

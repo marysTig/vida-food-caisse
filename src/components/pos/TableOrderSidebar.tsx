@@ -649,7 +649,8 @@ export function TableOrderSidebar({ tableId, tableNumber, mergedIds, onClose }: 
             tableId,
             tableNumber: isEmporter ? `EMPORTER #${tableNumber}` : tableNumber,
             items,
-            orderNote
+            orderNote,
+            globalSupplements: activeSupplements
           }).then(() => {
             console.log("[SERVER ORDER] Broadcast sent successfully");
           }).catch(err => {
@@ -669,7 +670,7 @@ export function TableOrderSidebar({ tableId, tableNumber, mergedIds, onClose }: 
             for (const printer of kitchenPrinters) {
               console.log(`[CAISSE PRINT] Printing to ${printer.name}`);
               try {
-                await printerService.printKitchen(printer, items, kitchenOrderLabel, orderNote);
+                await printerService.printKitchen(printer, items, kitchenOrderLabel, orderNote, activeSupplements);
                 console.log(`[CAISSE PRINT] Print success for ${printer.name}`);
               } catch (err: any) {
                 console.error(`[Cuisine] Erreur impression ${printer.name}:`, err);
@@ -730,7 +731,7 @@ export function TableOrderSidebar({ tableId, tableNumber, mergedIds, onClose }: 
         toast.warning("Aucune imprimante de caisse configurée.");
       }
       for (const printer of cashierPrinters) {
-        printerService.printReceipt(printer, itemsToPrint, totalToPrint, tableNumber).catch(err => {
+        printerService.printReceipt(printer, itemsToPrint, totalToPrint, tableNumber, activeSupplements).catch(err => {
           console.error("Erreur d'impression caisse:", err);
           toast.error("Erreur d'impression caisse", { description: err.message });
         });

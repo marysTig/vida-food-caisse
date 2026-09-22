@@ -5,6 +5,7 @@ import { usePrinterStore } from "@/lib/printerStore";
 import { toast } from "sonner";
 import type { CartItem } from "@/lib/cart";
 import type { Printer } from "@/lib/printerStore";
+import type { GlobalSupplement } from "@/lib/globalSupplementsStore";
 
 export type KitchenPrintPayload = {
   printId: string;
@@ -12,6 +13,7 @@ export type KitchenPrintPayload = {
   tableNumber: number | string;
   items: CartItem[];
   orderNote?: string;
+  globalSupplements?: GlobalSupplement[];
 };
 
 export function KitchenPrintHub() {
@@ -78,7 +80,8 @@ export function KitchenPrintHub() {
                 printer,
                 data.items,
                 data.tableNumber,
-                data.orderNote
+                data.orderNote,
+                data.globalSupplements
               );
               console.log(`[PRINT HUB] Print success for ${printer.name}`);
             } catch (err: any) {
