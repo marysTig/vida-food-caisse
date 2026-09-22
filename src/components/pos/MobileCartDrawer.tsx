@@ -66,7 +66,7 @@ export function MobileCartDrawer({
         </div>
 
         {/* Header */}
-        <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3 border-b border-border bg-card px-4 py-3">
+        <div className="shrink-0 grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3 border-b border-border bg-card px-4 py-3">
           <div className="min-w-0">
             <h2 className="truncate text-base font-bold text-foreground">Commande</h2>
             <p className="text-xs text-muted-foreground">{table}</p>
@@ -109,7 +109,7 @@ export function MobileCartDrawer({
         </div>
 
         {/* Footer */}
-        <div className="space-y-4 border-t border-border bg-card p-4 pb-6">
+        <div className="shrink-0 space-y-4 border-t border-border bg-card p-4 pb-safe-bottom">
           <OrderSummary subtotal={subtotal} discount={0} />
           <PaymentButton
             total={subtotal}
