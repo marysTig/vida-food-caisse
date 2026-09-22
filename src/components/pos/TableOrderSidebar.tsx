@@ -249,7 +249,7 @@ function OrderListDesktop({
           </div>
         )}
       </div>
-      <div className="border-t border-border bg-card p-4 space-y-3">
+      <div className="shrink-0 border-t border-border bg-card p-4 space-y-3 overflow-y-auto max-h-[55vh]">
         {/* Note globale de commande */}
         <div>
           <label className="mb-1.5 flex items-center gap-1.5 text-xs font-semibold text-muted-foreground">
