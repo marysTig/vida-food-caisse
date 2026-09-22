@@ -400,18 +400,22 @@ export const printerService = {
       ticket += SEP;
     }
 
-    // ── Note globale et suppléments ────────────────────────
-    let globalNotes = "";
+    // ── Suppléments de la commande (section séparée) ────────
     if (globalSupplements && globalSupplements.length > 0) {
-      globalNotes += `Suppléments : ${globalSupplements.map(s => s.label).join(", ")}\n`;
-    }
-    if (orderNote) {
-      globalNotes += `NOTE : ${orderNote}\n`;
+      ticket += LF;
+      ticket += ALIGN_LEFT;
+      ticket += SEP;
+      ticket += BOLD_ON + "SUPPLEMENTS DE LA COMMANDE :\n" + BOLD_OFF;
+      for (const supp of globalSupplements) {
+        ticket += `+ ${supp.label}\n`;
+      }
+      ticket += SEP;
     }
 
-    if (globalNotes) {
+    // ── Note globale de commande ─────────────────────────────
+    if (orderNote) {
       ticket += LF;
-      ticket += ALIGN_CENTER + BOLD_ON + globalNotes + BOLD_OFF;
+      ticket += ALIGN_CENTER + BOLD_ON + `NOTE : ${orderNote}\n` + BOLD_OFF;
     }
 
     ticket += "\n\n\n\n";

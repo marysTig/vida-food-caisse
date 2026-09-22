@@ -269,11 +269,12 @@ export function getTableOrdersRealtimeManager(): RealtimeManager {
  * Appeler ce hook UNE SEULE FOIS dans le composant racine (RootComponent).
  * Il charge les commandes depuis Supabase et active le Realtime.
  */
-export function useTableOrdersSync() {
+export function useTableOrdersSync(enabled = true) {
   useEffect(() => {
+    if (!enabled) return;
     const manager = getTableOrdersManager();
     void manager.init();
     // Pas de destroy() ici : le manager est un singleton global qui doit
     // rester actif pendant toute la durée de vie de l'app.
-  }, []);
+  }, [enabled]);
 }

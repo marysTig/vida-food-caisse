@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from "react";
+import { useState } from "react";
 import { ChefHat, User, Lock, Eye, EyeOff, AlertCircle } from "lucide-react";
 import { useSessionStore } from "@/lib/authStore";
 import { useNavigate } from "@tanstack/react-router";
@@ -11,13 +11,8 @@ export function UserLogin() {
   const [isShaking, setIsShaking] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   
-  const inputRef = useRef<HTMLInputElement>(null);
   const loginUser = useSessionStore((s) => s.loginUser);
   const navigate = useNavigate();
-
-  useEffect(() => {
-    inputRef.current?.focus();
-  }, []);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -95,7 +90,6 @@ export function UserLogin() {
             <div className="admin-login-input-wrap">
               <input
                 id="pos-password"
-                ref={inputRef}
                 type={showPassword ? "text" : "password"}
                 value={password}
                 onChange={(e) => { setPassword(e.target.value); setError(""); }}

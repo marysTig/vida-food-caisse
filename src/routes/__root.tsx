@@ -131,12 +131,15 @@ function RootShell({ children }: { children: ReactNode }) {
 function RootComponent() {
   const { queryClient } = Route.useRouteContext();
   const currentUser = useSessionStore(s => s.currentUser);
+  const isLoggedIn = !!currentUser;
 
-  // Initialise le chargement et l'écoute Realtime une seule fois,
-  // quelle que soit la page affichée (tables, emporter, admin…)
-  useTableSync();
-  useTableOrdersSync();
-  useGlobalSupplementsSync();
+  // ── Sync stores : ne s'initialisent QU'APRÈS le login ───────────────────────
+  // Avant le login, currentUser === null → isLoggedIn === false → aucun appel
+  // Supabase, aucun channel Realtime. Dès que l'utilisateur se connecte,
+  // isLoggedIn passe à true et les managers s'initialisent (idempotents).
+  useTableSync(isLoggedIn);
+  useTableOrdersSync(isLoggedIn);
+  useGlobalSupplementsSync(isLoggedIn);
 
   // ── Lifecycle Capacitor Android : retour au foreground ──────────────────────
   // Quand l'app revient au premier plan, on vérifie l'état des channels
@@ -148,7 +151,8 @@ function RootComponent() {
       try {
         await CapacitorApp.addListener("appStateChange", ({ isActive }) => {
           if (!mounted) return;
-          if (isActive) {
+          // Resync uniquement si un utilisateur est connecté
+          if (isActive && isLoggedIn) {
             console.log("[Realtime:Root] FOREGROUND — vérification des channels");
             void getTableRealtimeManager().handleForeground();
             void getTableOrdersRealtimeManager().handleForeground();
@@ -168,13 +172,14 @@ function RootComponent() {
         // Ignorer les erreurs si Capacitor n'est pas disponible (web)
       });
     };
-  }, []);
+  }, [isLoggedIn]);
 
   return (
     <QueryClientProvider client={queryClient}>
       {/* Required: nested routes render here. Removing <Outlet /> breaks all child routes. */}
       <Outlet />
-      {currentUser?.role !== 'serveur' && <KitchenPrintHub />}
+      {/* KitchenPrintHub : monté uniquement si l'utilisateur est connecté ET n'est pas serveur */}
+      {currentUser && currentUser.role !== 'serveur' && <KitchenPrintHub />}
     </QueryClientProvider>
   );
 }

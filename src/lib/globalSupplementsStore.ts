@@ -103,11 +103,12 @@ function getGlobalSupplementsManager(): RealtimeManager {
   return _manager;
 }
 
-export function useGlobalSupplementsSync() {
+export function useGlobalSupplementsSync(enabled = true) {
   useEffect(() => {
+    if (!enabled) return;
     const manager = getGlobalSupplementsManager();
     void manager.init();
-  }, []);
+  }, [enabled]);
 }
 
 export function useGlobalSupplementsCRUD() {

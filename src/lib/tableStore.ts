@@ -195,13 +195,14 @@ export function getTableRealtimeManager(): RealtimeManager {
 
 // ── Hook Realtime (appelé une seule fois dans RootComponent) ──────
 
-export function useTableSync() {
+export function useTableSync(enabled = true) {
   useEffect(() => {
+    if (!enabled) return;
     const manager = getTableRoomManager();
     void manager.init();
     // Pas de destroy() ici : le manager est un singleton global qui doit
     // rester actif pendant toute la durée de vie de l'app.
-  }, []);
+  }, [enabled]);
 }
 
 // ── Hook principal ────────────────────────────────────────────────

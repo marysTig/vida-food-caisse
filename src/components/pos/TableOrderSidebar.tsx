@@ -475,7 +475,7 @@ export function TableOrderSidebar({ tableId, tableNumber, mergedIds, onClose }: 
           try {
             const { data, error } = await supabase
               .from("table_orders")
-              .select("items, note")
+              .select("items, note, global_supplements")
               .eq("table_id", tableId)
               .maybeSingle();
             
