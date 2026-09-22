@@ -891,85 +891,89 @@ export function TableOrderSidebar({ tableId, tableNumber, mergedIds, onClose }: 
 
             {/* Contenu du panier — accordéon */}
             {cartOpen && (
-              <div className="border-t border-border">
-                {items.length === 0 ? (
-                  <div className="flex flex-col items-center gap-2 py-6 text-center">
-                    <ShoppingCart className="h-8 w-8 text-muted-foreground/50" />
-                    <p className="text-xs text-muted-foreground">
-                      Appuyez sur un produit pour l'ajouter
-                    </p>
-                  </div>
-                ) : (
-                  <div className="max-h-[220px] overflow-y-auto p-3">
-                    <CartItemsMobile items={items} decrease={decrease} increase={increase} remove={remove} />
-                  </div>
-                )}
+              <div className="border-t border-border flex flex-col" style={{ maxHeight: '70dvh' }}>
 
-                {/* Note globale de commande (mobile) */}
-                <div className="border-t border-border px-3 pt-3">
-                  <label className="mb-1.5 flex items-center gap-1.5 text-xs font-semibold text-muted-foreground">
-                    <NotebookPen className="h-3.5 w-3.5" />
-                    Note de commande
-                  </label>
-                  <OrderNoteInput value={orderNote} onChange={handleNoteChange} />
+                {/* Zone scrollable : articles + note + suppléments */}
+                <div className="flex-1 overflow-y-auto">
+                  {items.length === 0 ? (
+                    <div className="flex flex-col items-center gap-2 py-6 text-center">
+                      <ShoppingCart className="h-8 w-8 text-muted-foreground/50" />
+                      <p className="text-xs text-muted-foreground">
+                        Appuyez sur un produit pour l'ajouter
+                      </p>
+                    </div>
+                  ) : (
+                    <div className="max-h-[200px] overflow-y-auto p-3">
+                      <CartItemsMobile items={items} decrease={decrease} increase={increase} remove={remove} />
+                    </div>
+                  )}
 
-                  <div className="mt-3">
-                    <button 
-                      type="button" 
-                      onClick={() => setSupplementsOpen(!supplementsOpen)}
-                      className="mb-1.5 flex w-full items-center justify-between text-xs font-semibold text-muted-foreground transition-colors hover:text-foreground"
-                    >
-                      <div className="flex items-center gap-1.5">
-                        <Plus className="h-3.5 w-3.5" />
-                        Suppléments {activeSupplements.length > 0 && (
-                          <span className="rounded-full bg-primary/20 px-1.5 py-0.5 text-[9px] font-bold text-primary">
-                            {activeSupplements.length}
-                          </span>
-                        )}
-                      </div>
-                      <ChevronDown className={`h-4 w-4 transition-transform ${supplementsOpen ? "rotate-180" : ""}`} />
-                    </button>
-                    
-                    {supplementsOpen && (
-                      allGlobalSupplements.length === 0 ? (
-                        <p className="rounded-lg border border-dashed border-border px-3 py-2 text-xs text-muted-foreground text-center mt-2">
-                          Aucun supplément configuré.
-                        </p>
-                      ) : (
-                        <div className="mt-2 max-h-[180px] overflow-y-auto rounded-lg border border-border bg-background p-1.5 shadow-sm space-y-1">
-                        {allGlobalSupplements.map(supp => {
-                          const isSelected = activeSupplements.some(s => s.id === supp.id);
-                          return (
-                            <button
-                              key={supp.id}
-                              type="button"
-                              onClick={() => handleToggleGlobalSupplement(supp)}
-                              className={`flex w-full items-center justify-between gap-2 rounded-md px-2 py-2 text-sm transition-colors ${
-                                isSelected
-                                  ? "bg-primary/10 text-primary"
-                                  : "hover:bg-muted/60 text-foreground"
-                              }`}
-                            >
-                              <div className="flex items-center gap-3 min-w-0">
-                                <div className={`flex h-5 w-5 shrink-0 items-center justify-center rounded border transition-colors ${
-                                  isSelected ? "border-primary bg-primary" : "border-muted-foreground/40"
-                                }`}>
-                                  {isSelected && <Check className="h-3.5 w-3.5 text-primary-foreground" />}
+                  {/* Note globale de commande (mobile) */}
+                  <div className="border-t border-border px-3 pt-3 pb-3">
+                    <label className="mb-1.5 flex items-center gap-1.5 text-xs font-semibold text-muted-foreground">
+                      <NotebookPen className="h-3.5 w-3.5" />
+                      Note de commande
+                    </label>
+                    <OrderNoteInput value={orderNote} onChange={handleNoteChange} />
+
+                    <div className="mt-3">
+                      <button 
+                        type="button" 
+                        onClick={() => setSupplementsOpen(!supplementsOpen)}
+                        className="mb-1.5 flex w-full items-center justify-between text-xs font-semibold text-muted-foreground transition-colors hover:text-foreground"
+                      >
+                        <div className="flex items-center gap-1.5">
+                          <Plus className="h-3.5 w-3.5" />
+                          Suppléments {activeSupplements.length > 0 && (
+                            <span className="rounded-full bg-primary/20 px-1.5 py-0.5 text-[9px] font-bold text-primary">
+                              {activeSupplements.length}
+                            </span>
+                          )}
+                        </div>
+                        <ChevronDown className={`h-4 w-4 transition-transform ${supplementsOpen ? "rotate-180" : ""}`} />
+                      </button>
+                      
+                      {supplementsOpen && (
+                        allGlobalSupplements.length === 0 ? (
+                          <p className="rounded-lg border border-dashed border-border px-3 py-2 text-xs text-muted-foreground text-center mt-2">
+                            Aucun supplément configuré.
+                          </p>
+                        ) : (
+                          <div className="mt-2 max-h-[160px] overflow-y-auto rounded-lg border border-border bg-background p-1.5 shadow-sm space-y-1">
+                          {allGlobalSupplements.map(supp => {
+                            const isSelected = activeSupplements.some(s => s.id === supp.id);
+                            return (
+                              <button
+                                key={supp.id}
+                                type="button"
+                                onClick={() => handleToggleGlobalSupplement(supp)}
+                                className={`flex w-full items-center justify-between gap-2 rounded-md px-2 py-2 text-sm transition-colors ${
+                                  isSelected
+                                    ? "bg-primary/10 text-primary"
+                                    : "hover:bg-muted/60 text-foreground"
+                                }`}
+                              >
+                                <div className="flex items-center gap-3 min-w-0">
+                                  <div className={`flex h-5 w-5 shrink-0 items-center justify-center rounded border transition-colors ${
+                                    isSelected ? "border-primary bg-primary" : "border-muted-foreground/40"
+                                  }`}>
+                                    {isSelected && <Check className="h-3.5 w-3.5 text-primary-foreground" />}
+                                  </div>
+                                  <span className="truncate font-medium">{supp.label}</span>
                                 </div>
-                                <span className="truncate font-medium">{supp.label}</span>
-                              </div>
-                              <span className="shrink-0 text-xs font-bold text-primary">+{formatDA(supp.price)}</span>
-                            </button>
-                          );
-                        })}
-                      </div>
-                      )
-                    )}
+                                <span className="shrink-0 text-xs font-bold text-primary">+{formatDA(supp.price)}</span>
+                              </button>
+                            );
+                          })}
+                        </div>
+                        )
+                      )}
+                    </div>
                   </div>
                 </div>
 
-                {/* Bouton valider / encaisser */}
-                <div className="border-t border-border p-3 pb-safe-bottom">
+                {/* Bouton valider / encaisser — toujours visible en bas */}
+                <div className="shrink-0 border-t border-border p-3 pb-safe-bottom bg-card">
                   {isOccupied ? (
                     <div className="flex gap-2">
                       <button
