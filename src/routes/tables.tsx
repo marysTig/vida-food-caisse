@@ -450,8 +450,10 @@ function TablesPage() {
       const numbers = tableData.filter(t => multiCheckoutTables.includes(t.id)).map(t => t.number).join(", ");
       tableNumberStr = `Tables ${numbers}`;
     }
+    // Snapshot des suppléments AVANT clearOrder
+    const supplementsToPrint = allIds.flatMap(id => orderSupplements[id] ?? []);
     // Enregistrer dans l'historique du Rapport Z
-    recordZReport(itemsToPrint, "table", tableNumberStr);
+    recordZReport(itemsToPrint, "table", tableNumberStr, supplementsToPrint);
 
     clearOrder(checkoutTable.id);
     await updateTable(checkoutTable.id, {

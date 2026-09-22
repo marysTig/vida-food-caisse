@@ -101,7 +101,7 @@ function EmporterPage() {
     const supplementsToPrint = orderSupplements[checkoutTable.id] || [];
     
     // Enregistrer dans l'historique du Rapport Z
-    recordZReport(itemsToPrint, "emporter", checkoutTable.number);
+    recordZReport(itemsToPrint, "emporter", checkoutTable.number, supplementsToPrint);
 
     clearOrder(checkoutTable.id);
     await updateTable(checkoutTable.id, {

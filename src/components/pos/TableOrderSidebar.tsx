@@ -281,7 +281,7 @@ function OrderListDesktop({
                   Aucun supplément configuré.
                 </p>
               ) : (
-                <div className="mt-2 space-y-1 rounded-lg border border-border bg-background p-1.5 shadow-sm">
+                <div className="mt-2 max-h-[180px] overflow-y-auto rounded-lg border border-border bg-background p-1.5 shadow-sm space-y-1">
                 {allSupplements.map(supp => {
                   const isSelected = activeSupplements.some(s => s.id === supp.id);
                   return (
@@ -936,7 +936,7 @@ export function TableOrderSidebar({ tableId, tableNumber, mergedIds, onClose }: 
                           Aucun supplément configuré.
                         </p>
                       ) : (
-                        <div className="mt-2 space-y-1 rounded-lg border border-border bg-background p-1.5 shadow-sm">
+                        <div className="mt-2 max-h-[180px] overflow-y-auto rounded-lg border border-border bg-background p-1.5 shadow-sm space-y-1">
                         {allGlobalSupplements.map(supp => {
                           const isSelected = activeSupplements.some(s => s.id === supp.id);
                           return (
