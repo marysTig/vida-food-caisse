@@ -8,11 +8,13 @@ type OrderItemProps = {
   onDecrease: (id: string) => void;
   onRemove: (id: string) => void;
   onEdit: (item: CartItem) => void;
+  onAddSupplement?: (item: CartItem) => void;
 };
 
-export function OrderItem({ item, onIncrease, onDecrease, onRemove, onEdit }: OrderItemProps) {
+export function OrderItem({ item, onIncrease, onDecrease, onRemove, onEdit, onAddSupplement }: OrderItemProps) {
   return (
     <div className="rounded-xl border border-border bg-card p-3">
+      {/* Row 1: product info + price */}
       <div className="grid grid-cols-[minmax(0,1fr)_auto] items-start gap-2">
         <div className="min-w-0">
           <p className="truncate text-sm font-semibold text-foreground">
@@ -28,12 +30,13 @@ export function OrderItem({ item, onIncrease, onDecrease, onRemove, onEdit }: Or
             </p>
           )}
           {item.note && (
-            <p className="mt-1 truncate text-xs italic text-muted-foreground">“{item.note}”</p>
+            <p className="mt-1 truncate text-xs italic text-muted-foreground">"{item.note}"</p>
           )}
         </div>
         <p className="shrink-0 text-sm font-bold text-foreground">{formatDA(lineTotal(item))}</p>
       </div>
 
+      {/* Row 2: qty controls + edit/delete */}
       <div className="mt-3 flex items-center justify-between gap-2">
         <div className="flex items-center gap-1 rounded-lg border border-border p-1">
           <button
@@ -71,6 +74,18 @@ export function OrderItem({ item, onIncrease, onDecrease, onRemove, onEdit }: Or
           </button>
         </div>
       </div>
+
+      {/* Row 3: Add Supplement — full width on its own row, always visible */}
+      {onAddSupplement && (
+        <button
+          type="button"
+          onClick={() => onAddSupplement(item)}
+          className="mt-2 flex w-full items-center justify-center gap-1.5 rounded-lg border border-primary/30 bg-primary/5 py-2 text-xs font-bold text-primary transition-colors hover:bg-primary/10 active:bg-primary/20"
+        >
+          <Plus className="h-3.5 w-3.5 shrink-0" />
+          + Supplément
+        </button>
+      )}
     </div>
   );
 }

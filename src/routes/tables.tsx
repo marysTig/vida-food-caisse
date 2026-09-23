@@ -440,7 +440,7 @@ function TablesPage() {
   const handleQuickCheckout = async () => {
     if (!checkoutTable) return;
 
-    // --- Snapshot des items AVANT clearOrder ---
+    // Snapshot des items AVANT clearOrder
     const allIds = [checkoutTable.id, ...multiCheckoutTables];
     const itemsToPrint = allIds.flatMap(id => orders[id] ?? []);
     const totalToPrint = cartSubtotal(itemsToPrint);
@@ -450,10 +450,8 @@ function TablesPage() {
       const numbers = tableData.filter(t => multiCheckoutTables.includes(t.id)).map(t => t.number).join(", ");
       tableNumberStr = `Tables ${numbers}`;
     }
-    // Snapshot des suppléments AVANT clearOrder
-    const supplementsToPrint = allIds.flatMap(id => orderSupplements[id] ?? []);
-    // Enregistrer dans l'historique du Rapport Z
-    recordZReport(itemsToPrint, "table", tableNumberStr, supplementsToPrint);
+    // Enregistrer dans l'historique du Rapport Z (supplements are embedded in each item)
+    recordZReport(itemsToPrint, "table", tableNumberStr, []);
 
     clearOrder(checkoutTable.id);
     await updateTable(checkoutTable.id, {
@@ -505,7 +503,7 @@ function TablesPage() {
     try {
       const cashierPrinters = printers.filter(p => p.enabled && p.type === "caisse");
       for (const printer of cashierPrinters) {
-        printerService.printReceipt(printer, itemsToPrint, totalToPrint, tableNumber, checkoutSupplements).catch(err => {
+        printerService.printReceipt(printer, itemsToPrint, totalToPrint, tableNumber, []).catch(err => {
           console.error("Erreur d'impression caisse:", err);
           toast.error("Erreur d'impression caisse", { description: err.message });
         });

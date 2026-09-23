@@ -4,6 +4,7 @@ import { CategoryTabs } from "./CategoryTabs";
 import { ProductGrid } from "./ProductGrid";
 import { ProductSearch } from "./ProductSearch";
 import { ModifierModal } from "./ModifierModal";
+import { SupplementModal } from "./SupplementModal";
 import { CheckoutReceiptModal } from "./CheckoutReceiptModal";
 import { OptionSelectModal } from "./OptionSelectModal";
 import { type Category, type Product, type ProductOption, formatDA } from "@/data/menu";
@@ -86,54 +87,78 @@ type CartItemsMobileProps = {
   decrease: (id: string) => void;
   increase: (id: string) => void;
   remove: (id: string) => void;
+  onAddSupplement?: (item: CartItem) => void;
 };
 
-function CartItemsMobile({ items, decrease, increase, remove }: CartItemsMobileProps) {
+function CartItemsMobile({ items, decrease, increase, remove, onAddSupplement }: CartItemsMobileProps) {
   return (
     <div className="space-y-2">
       {items.map((item) => (
         <div
           key={item.id}
-          className="flex items-center gap-2 rounded-xl border border-border bg-background p-2.5"
+          className="rounded-xl border border-border bg-background p-2.5"
         >
-          <div className="min-w-0 flex-1">
-            <p className="truncate text-xs font-semibold text-foreground">
-              {item.product.name}
-              {item.selectedOption && (
-                <span className="ml-1 font-normal text-muted-foreground">
-                  ({item.selectedOption.label})
-                </span>
+          {/* Top row: info + qty + delete */}
+          <div className="flex items-center gap-2">
+            <div className="min-w-0 flex-1">
+              <p className="truncate text-xs font-semibold text-foreground">
+                {item.product.name}
+                {item.selectedOption && (
+                  <span className="ml-1 font-normal text-muted-foreground">
+                    ({item.selectedOption.label})
+                  </span>
+                )}
+              </p>
+              {item.note && (
+                <p className="truncate text-[10px] italic text-muted-foreground">"{item.note}"</p>
               )}
-            </p>
-            {item.note && (
-              <p className="truncate text-[10px] italic text-muted-foreground">"{item.note}"</p>
-            )}
-            <p className="text-[11px] font-bold text-primary">{formatDA(lineTotal(item))}</p>
-          </div>
-          <div className="flex items-center gap-1">
+              {item.supplements.length > 0 && (
+                <div className="flex flex-wrap gap-0.5 mt-0.5">
+                  {item.supplements.map(s => (
+                    <span key={s.id} className="inline-flex items-center rounded-full bg-primary/10 px-1.5 py-0 text-[9px] font-semibold text-primary">
+                      +{s.label}
+                    </span>
+                  ))}
+                </div>
+              )}
+              <p className="text-[11px] font-bold text-primary">{formatDA(lineTotal(item))}</p>
+            </div>
+            <div className="flex shrink-0 items-center gap-1">
+              <button
+                type="button"
+                onClick={() => decrease(item.id)}
+                className="grid h-6 w-6 place-items-center rounded-md border border-border text-foreground"
+              >
+                <Minus className="h-3 w-3" />
+              </button>
+              <span className="w-5 text-center text-xs font-bold text-foreground">{item.quantity}</span>
+              <button
+                type="button"
+                onClick={() => increase(item.id)}
+                className="grid h-6 w-6 place-items-center rounded-md bg-primary text-primary-foreground"
+              >
+                <Plus className="h-3 w-3" />
+              </button>
+            </div>
             <button
               type="button"
-              onClick={() => decrease(item.id)}
-              className="grid h-6 w-6 place-items-center rounded-md border border-border text-foreground"
+              onClick={() => remove(item.id)}
+              className="grid h-7 w-7 shrink-0 place-items-center rounded-lg text-destructive hover:bg-destructive/10"
             >
-              <Minus className="h-3 w-3" />
-            </button>
-            <span className="w-5 text-center text-xs font-bold text-foreground">{item.quantity}</span>
-            <button
-              type="button"
-              onClick={() => increase(item.id)}
-              className="grid h-6 w-6 place-items-center rounded-md bg-primary text-primary-foreground"
-            >
-              <Plus className="h-3 w-3" />
+              <Trash2 className="h-3.5 w-3.5" />
             </button>
           </div>
-          <button
-            type="button"
-            onClick={() => remove(item.id)}
-            className="grid h-7 w-7 shrink-0 place-items-center rounded-lg text-destructive hover:bg-destructive/10"
-          >
-            <Trash2 className="h-3.5 w-3.5" />
-          </button>
+          {/* Supplement button — own full-width row */}
+          {onAddSupplement && (
+            <button
+              type="button"
+              onClick={() => onAddSupplement(item)}
+              className="mt-2 flex w-full items-center justify-center gap-1 rounded-lg border border-primary/30 bg-primary/5 py-1.5 text-[10px] font-bold text-primary transition-colors hover:bg-primary/10 active:bg-primary/20"
+            >
+              <Plus className="h-2.5 w-2.5 shrink-0" />
+              + Supplément
+            </button>
+          )}
         </div>
       ))}
     </div>
@@ -157,17 +182,13 @@ type OrderListDesktopProps = {
   onNoteChange: (note: string) => void;
   onValidate: () => void;
   onCheckout: () => void;
-  allSupplements: GlobalSupplement[];
-  activeSupplements: GlobalSupplement[];
-  onToggleSupplement: (supp: GlobalSupplement) => void;
+  onAddSupplement?: (item: CartItem) => void;
 };
 
 function OrderListDesktop({
   tableNumber, mergedNumbers, items, orderNote, itemCount, total,
-  isOccupied, isServeur, decrease, increase, remove, onNoteChange, onValidate, onCheckout,
-  allSupplements, activeSupplements, onToggleSupplement
+  isOccupied, isServeur, decrease, increase, remove, onNoteChange, onValidate, onCheckout, onAddSupplement
 }: OrderListDesktopProps) {
-  const [supplementsOpen, setSupplementsOpen] = useState(false);
 
   return (
     <div className="flex h-full flex-col">
@@ -202,48 +223,71 @@ function OrderListDesktop({
             {items.map((item) => (
               <div
                 key={item.id}
-                className="flex items-center gap-3 rounded-xl border border-border bg-card p-3"
+                className="rounded-xl border border-border bg-card p-3"
               >
-                <div className="min-w-0 flex-1">
-                  <p className="truncate text-sm font-semibold text-foreground">
-                    {item.product.name}
-                    {item.selectedOption && (
-                      <span className="ml-1 font-normal text-muted-foreground">
-                        ({item.selectedOption.label})
-                      </span>
+                {/* Top row: info + qty controls + delete */}
+                <div className="flex items-center gap-2">
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-sm font-semibold text-foreground">
+                      {item.product.name}
+                      {item.selectedOption && (
+                        <span className="ml-1 font-normal text-muted-foreground">
+                          ({item.selectedOption.label})
+                        </span>
+                      )}
+                    </p>
+                    {item.note && (
+                      <p className="truncate text-xs italic text-muted-foreground">"{item.note}"</p>
                     )}
-                  </p>
-                  {item.note && (
-                    <p className="truncate text-xs italic text-muted-foreground">"{item.note}"</p>
-                  )}
-                  <p className="text-xs font-bold text-primary">{formatDA(lineTotal(item))}</p>
-                </div>
-                <div className="flex items-center gap-1">
+                    {item.supplements.length > 0 && (
+                      <div className="flex flex-wrap gap-0.5 mt-0.5">
+                        {item.supplements.map(s => (
+                          <span key={s.id} className="inline-flex items-center rounded-full bg-primary/10 px-1.5 py-0 text-[9px] font-semibold text-primary">
+                            +{s.label}
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                    <p className="text-xs font-bold text-primary">{formatDA(lineTotal(item))}</p>
+                  </div>
+                  <div className="flex shrink-0 items-center gap-1">
+                    <button
+                      type="button"
+                      onClick={() => decrease(item.id)}
+                      className="grid h-7 w-7 place-items-center rounded-md border border-border text-foreground transition-colors hover:bg-muted"
+                    >
+                      <Minus className="h-3.5 w-3.5" />
+                    </button>
+                    <span className="w-6 text-center text-sm font-bold text-foreground">
+                      {item.quantity}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => increase(item.id)}
+                      className="grid h-7 w-7 place-items-center rounded-md bg-primary text-primary-foreground transition-colors hover:bg-primary/90"
+                    >
+                      <Plus className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
                   <button
                     type="button"
-                    onClick={() => decrease(item.id)}
-                    className="grid h-7 w-7 place-items-center rounded-md border border-border text-foreground transition-colors hover:bg-muted"
+                    onClick={() => remove(item.id)}
+                    className="grid h-8 w-8 shrink-0 place-items-center rounded-lg text-destructive transition-colors hover:bg-destructive/10"
                   >
-                    <Minus className="h-3.5 w-3.5" />
-                  </button>
-                  <span className="w-6 text-center text-sm font-bold text-foreground">
-                    {item.quantity}
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() => increase(item.id)}
-                    className="grid h-7 w-7 place-items-center rounded-md bg-primary text-primary-foreground transition-colors hover:bg-primary/90"
-                  >
-                    <Plus className="h-3.5 w-3.5" />
+                    <Trash2 className="h-4 w-4" />
                   </button>
                 </div>
-                <button
-                  type="button"
-                  onClick={() => remove(item.id)}
-                  className="grid h-8 w-8 shrink-0 place-items-center rounded-lg text-destructive transition-colors hover:bg-destructive/10"
-                >
-                  <Trash2 className="h-4 w-4" />
-                </button>
+                {/* Supplement button — own full-width row */}
+                {onAddSupplement && (
+                  <button
+                    type="button"
+                    onClick={() => onAddSupplement(item)}
+                    className="mt-2 flex w-full items-center justify-center gap-1.5 rounded-lg border border-primary/30 bg-primary/5 py-1.5 text-xs font-bold text-primary transition-colors hover:bg-primary/10 active:bg-primary/20"
+                  >
+                    <Plus className="h-3 w-3 shrink-0" />
+                    + Supplément
+                  </button>
+                )}
               </div>
             ))}
           </div>
@@ -258,61 +302,8 @@ function OrderListDesktop({
           </label>
           <OrderNoteInput value={orderNote} onChange={onNoteChange} />
 
-          <div className="mt-3">
-            <button 
-              type="button" 
-              onClick={() => setSupplementsOpen(!supplementsOpen)}
-              className="mb-1.5 flex w-full items-center justify-between text-xs font-semibold text-muted-foreground transition-colors hover:text-foreground"
-            >
-              <div className="flex items-center gap-1.5">
-                <Plus className="h-3.5 w-3.5" />
-                Suppléments {activeSupplements.length > 0 && (
-                  <span className="rounded-full bg-primary/20 px-1.5 py-0.5 text-[9px] font-bold text-primary">
-                    {activeSupplements.length}
-                  </span>
-                )}
-              </div>
-              <ChevronDown className={`h-4 w-4 transition-transform ${supplementsOpen ? "rotate-180" : ""}`} />
-            </button>
-            
-            {supplementsOpen && (
-              allSupplements.length === 0 ? (
-                <p className="rounded-lg border border-dashed border-border px-3 py-2 text-xs text-muted-foreground text-center mt-2">
-                  Aucun supplément configuré.
-                </p>
-              ) : (
-                <div className="mt-2 max-h-[180px] overflow-y-auto rounded-lg border border-border bg-background p-1.5 shadow-sm space-y-1">
-                {allSupplements.map(supp => {
-                  const isSelected = activeSupplements.some(s => s.id === supp.id);
-                  return (
-                    <button
-                      key={supp.id}
-                      type="button"
-                      onClick={() => onToggleSupplement(supp)}
-                      className={`flex w-full items-center justify-between gap-2 rounded-md px-2 py-1.5 text-sm transition-colors ${
-                        isSelected
-                          ? "bg-primary/10 text-primary"
-                          : "hover:bg-muted/60 text-foreground"
-                      }`}
-                    >
-                      <div className="flex items-center gap-2 min-w-0">
-                        <div className={`flex h-4 w-4 shrink-0 items-center justify-center rounded border transition-colors ${
-                          isSelected ? "border-primary bg-primary" : "border-muted-foreground/40"
-                        }`}>
-                          {isSelected && <Check className="h-3 w-3 text-primary-foreground" />}
-                        </div>
-                        <span className="truncate font-medium">{supp.label}</span>
-                      </div>
-                      <span className="shrink-0 text-xs font-bold">+{formatDA(supp.price)}</span>
-                    </button>
-                  );
-                })}
-              </div>
-              )
-            )}
-          </div>
         </div>
-        <div className="flex items-center justify-between">
+        <div className="flex items-center justify-between mt-4">
           <span className="text-sm text-muted-foreground">
             {itemCount} article{itemCount > 1 ? "s" : ""}
           </span>
@@ -441,14 +432,13 @@ export function TableOrderSidebar({ tableId, tableNumber, mergedIds, onClose }: 
   const items = orders[tableId] || [];
   const orderNote = orderNotes[tableId] || "";
   const activeSupplements = orderSupplements[tableId] || [];
-  const supplementsTotal = activeSupplements.reduce((sum, s) => sum + s.price, 0);
-  const cartBaseTotal = cartSubtotal(items);
-  const total = cartBaseTotal + supplementsTotal;
+  const total = cartSubtotal(items);
 
   const [editing, setEditing] = useState<CartItem | null>(null);
   const [modifierOpen, setModifierOpen] = useState(false);
   const [optionProduct, setOptionProduct] = useState<Product | null>(null);
-  const [supplementsOpen, setSupplementsOpen] = useState(false);
+  const [supplementModalOpen, setSupplementModalOpen] = useState(false);
+  const [activeSupplementItem, setActiveSupplementItem] = useState<CartItem | null>(null);
   const [checkoutOpen, setCheckoutOpen] = useState(false);
 
   // Mobile: panier ouvert ou fermé (bottom panel)
@@ -650,7 +640,7 @@ export function TableOrderSidebar({ tableId, tableNumber, mergedIds, onClose }: 
             tableNumber: isEmporter ? `EMPORTER #${tableNumber}` : tableNumber,
             items,
             orderNote,
-            globalSupplements: activeSupplements
+            globalSupplements: []
           }).then(() => {
             console.log("[SERVER ORDER] Broadcast sent successfully");
           }).catch(err => {
@@ -670,7 +660,7 @@ export function TableOrderSidebar({ tableId, tableNumber, mergedIds, onClose }: 
             for (const printer of kitchenPrinters) {
               console.log(`[CAISSE PRINT] Printing to ${printer.name}`);
               try {
-                await printerService.printKitchen(printer, items, kitchenOrderLabel, orderNote, activeSupplements);
+                await printerService.printKitchen(printer, items, kitchenOrderLabel, orderNote, []);
                 console.log(`[CAISSE PRINT] Print success for ${printer.name}`);
               } catch (err: any) {
                 console.error(`[Cuisine] Erreur impression ${printer.name}:`, err);
@@ -700,7 +690,7 @@ export function TableOrderSidebar({ tableId, tableNumber, mergedIds, onClose }: 
     // ----------------------------------------------
 
     // Enregistrer dans l'historique du Rapport Z
-    recordZReport(itemsToPrint, "table", tableNumber, activeSupplements);
+    recordZReport(itemsToPrint, "table", tableNumber, []);
 
     // 1. Clear items + note
     clearOrder(tableId);
@@ -731,7 +721,7 @@ export function TableOrderSidebar({ tableId, tableNumber, mergedIds, onClose }: 
         toast.warning("Aucune imprimante de caisse configurée.");
       }
       for (const printer of cashierPrinters) {
-        printerService.printReceipt(printer, itemsToPrint, totalToPrint, tableNumber, activeSupplements).catch(err => {
+        printerService.printReceipt(printer, itemsToPrint, totalToPrint, tableNumber, []).catch(err => {
           console.error("Erreur d'impression caisse:", err);
           toast.error("Erreur d'impression caisse", { description: err.message });
         });
@@ -751,14 +741,20 @@ export function TableOrderSidebar({ tableId, tableNumber, mergedIds, onClose }: 
   // Stable callbacks pour les sous-composants
   const handleOpenCheckout = useCallback(() => setCheckoutOpen(true), []);
   const handleNoteChange = useCallback((note: string) => setOrderNote(tableId, note), [tableId, setOrderNote]);
-  const handleToggleGlobalSupplement = useCallback((supp: GlobalSupplement) => {
-    const isSelected = activeSupplements.some((s) => s.id === supp.id);
-    if (isSelected) {
-      setOrderSupplements(tableId, activeSupplements.filter((s) => s.id !== supp.id));
-    } else {
-      setOrderSupplements(tableId, [...activeSupplements, supp]);
-    }
-  }, [tableId, activeSupplements, setOrderSupplements]);
+
+  const handleConfirmSupplement = useCallback((
+    id: string,
+    supplements: { id: string; label: string; price: number }[]
+  ) => {
+    const prev = orders[tableId] || [];
+    setOrder(tableId, prev.map((item) =>
+      item.id === id
+        ? { ...item, supplements }
+        : item,
+    ));
+    setSupplementModalOpen(false);
+    setActiveSupplementItem(null);
+  }, [orders, tableId, setOrder]);
 
   return (
     <div className="fixed inset-0 z-[100] flex justify-end bg-black/40">
@@ -796,9 +792,10 @@ export function TableOrderSidebar({ tableId, tableNumber, mergedIds, onClose }: 
             onNoteChange={handleNoteChange}
             onValidate={handleValidateOrder}
             onCheckout={handleOpenCheckout}
-            allSupplements={allGlobalSupplements}
-            activeSupplements={activeSupplements}
-            onToggleSupplement={handleToggleGlobalSupplement}
+            onAddSupplement={(item) => {
+              setActiveSupplementItem(item);
+              setSupplementModalOpen(true);
+            }}
           />
         </div>
 
@@ -904,7 +901,10 @@ export function TableOrderSidebar({ tableId, tableNumber, mergedIds, onClose }: 
                     </div>
                   ) : (
                     <div className="max-h-[200px] overflow-y-auto p-3">
-                      <CartItemsMobile items={items} decrease={decrease} increase={increase} remove={remove} />
+                      <CartItemsMobile items={items} decrease={decrease} increase={increase} remove={remove} onAddSupplement={(item) => {
+                        setActiveSupplementItem(item);
+                        setSupplementModalOpen(true);
+                      }} />
                     </div>
                   )}
 
@@ -915,60 +915,6 @@ export function TableOrderSidebar({ tableId, tableNumber, mergedIds, onClose }: 
                       Note de commande
                     </label>
                     <OrderNoteInput value={orderNote} onChange={handleNoteChange} />
-
-                    <div className="mt-3">
-                      <button 
-                        type="button" 
-                        onClick={() => setSupplementsOpen(!supplementsOpen)}
-                        className="mb-1.5 flex w-full items-center justify-between text-xs font-semibold text-muted-foreground transition-colors hover:text-foreground"
-                      >
-                        <div className="flex items-center gap-1.5">
-                          <Plus className="h-3.5 w-3.5" />
-                          Suppléments {activeSupplements.length > 0 && (
-                            <span className="rounded-full bg-primary/20 px-1.5 py-0.5 text-[9px] font-bold text-primary">
-                              {activeSupplements.length}
-                            </span>
-                          )}
-                        </div>
-                        <ChevronDown className={`h-4 w-4 transition-transform ${supplementsOpen ? "rotate-180" : ""}`} />
-                      </button>
-                      
-                      {supplementsOpen && (
-                        allGlobalSupplements.length === 0 ? (
-                          <p className="rounded-lg border border-dashed border-border px-3 py-2 text-xs text-muted-foreground text-center mt-2">
-                            Aucun supplément configuré.
-                          </p>
-                        ) : (
-                          <div className="mt-2 max-h-[160px] overflow-y-auto rounded-lg border border-border bg-background p-1.5 shadow-sm space-y-1">
-                          {allGlobalSupplements.map(supp => {
-                            const isSelected = activeSupplements.some(s => s.id === supp.id);
-                            return (
-                              <button
-                                key={supp.id}
-                                type="button"
-                                onClick={() => handleToggleGlobalSupplement(supp)}
-                                className={`flex w-full items-center justify-between gap-2 rounded-md px-2 py-2 text-sm transition-colors ${
-                                  isSelected
-                                    ? "bg-primary/10 text-primary"
-                                    : "hover:bg-muted/60 text-foreground"
-                                }`}
-                              >
-                                <div className="flex items-center gap-3 min-w-0">
-                                  <div className={`flex h-5 w-5 shrink-0 items-center justify-center rounded border transition-colors ${
-                                    isSelected ? "border-primary bg-primary" : "border-muted-foreground/40"
-                                  }`}>
-                                    {isSelected && <Check className="h-3.5 w-3.5 text-primary-foreground" />}
-                                  </div>
-                                  <span className="truncate font-medium">{supp.label}</span>
-                                </div>
-                                <span className="shrink-0 text-xs font-bold text-primary">+{formatDA(supp.price)}</span>
-                              </button>
-                            );
-                          })}
-                        </div>
-                        )
-                      )}
-                    </div>
                   </div>
                 </div>
 
@@ -1020,12 +966,20 @@ export function TableOrderSidebar({ tableId, tableNumber, mergedIds, onClose }: 
         onConfirm={confirmModifier}
       />
 
+      <SupplementModal
+        item={activeSupplementItem}
+        open={supplementModalOpen}
+        allSupplements={allGlobalSupplements}
+        onOpenChange={setSupplementModalOpen}
+        onConfirm={handleConfirmSupplement}
+      />
+
       <CheckoutReceiptModal
         open={checkoutOpen}
         tableNumber={tableNumber}
         items={items}
         orderNote={orderNote || undefined}
-        globalSupplements={activeSupplements}
+        globalSupplements={[]}
         onClose={() => setCheckoutOpen(false)}
         onConfirm={async () => {
           setCheckoutOpen(false);

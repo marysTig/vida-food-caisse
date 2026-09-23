@@ -1,6 +1,7 @@
 import { formatDA } from "@/data/menu";
 import { type GlobalSupplement } from "@/lib/globalSupplementsStore";
 import { type Printer } from "@/lib/printerStore";
+import { type CartItem, lineTotal } from "@/lib/cart";
 
 declare global {
   interface Window {
