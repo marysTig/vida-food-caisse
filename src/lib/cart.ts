@@ -17,7 +17,7 @@ export function lineTotal(item: CartItem) {
   if (item.customPrice !== undefined) {
     basePrice = item.customPrice;
   }
-  return (basePrice + extras) * item.quantity;
+  return (basePrice * item.quantity) + extras;
 }
 
 export function cartSubtotal(items: CartItem[]) {

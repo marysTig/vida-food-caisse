@@ -84,6 +84,7 @@ export async function recordZReport(
         if (legacyError) {
           console.error("Erreur Rapport Z (legacy):", legacyError);
           toast.error("Rapport Z non enregistré", { description: legacyError.message, duration: 5000 });
+          throw new Error(`Z Report insert failed: ${legacyError.message}`);
         } else {
           const label = orderType === "emporter" ? `À Emporter #${orderOrTableNumber}` : `Table ${orderOrTableNumber}`;
           toast.success("Rapport Z mis à jour", { description: `${items.length} produit(s) — ${label}`, duration: 3000 });
@@ -91,6 +92,7 @@ export async function recordZReport(
       } else {
         console.error("Erreur Rapport Z:", error);
         toast.error("Rapport Z non enregistré", { description: error.message, duration: 5000 });
+        throw new Error(`Z Report insert failed: ${error.message}`);
       }
     } else {
       const label = orderType === "emporter"
@@ -107,5 +109,6 @@ export async function recordZReport(
       description: err?.message ?? "Vérifiez la connexion Supabase.",
       duration: 5000,
     });
+    throw err;
   }
 }

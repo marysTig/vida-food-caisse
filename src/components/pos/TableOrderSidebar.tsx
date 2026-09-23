@@ -689,8 +689,23 @@ export function TableOrderSidebar({ tableId, tableNumber, mergedIds, onClose }: 
     const totalToPrint = total;
     // ----------------------------------------------
 
-    // Enregistrer dans l'historique du Rapport Z
-    recordZReport(itemsToPrint, "table", tableNumber, []);
+    // Déterminer le type de commande et le label correct
+    const orderType = isEmporter ? "emporter" : "table";
+    const orderOrTableNumber = isEmporter ? tableNumber : tableNumber;
+    const receiptLabel: string | number = isEmporter
+      ? `À EMPORTER — Commande #${tableNumber}`
+      : tableNumber;
+
+    // Enregistrer dans l'historique du Rapport Z (AVANT de vider l'ordre)
+    // Si le Z Report échoue, on arrête ici — on ne libère pas la table
+    // pour éviter de perdre une vente sans l'avoir enregistrée.
+    try {
+      await recordZReport(itemsToPrint, orderType, orderOrTableNumber, []);
+    } catch (err) {
+      console.error("[CHECKOUT] Z Report a échoué — paiement annulé:", err);
+      toast.error("Erreur d'enregistrement du Rapport Z. Paiement non finalisé.", { duration: 7000 });
+      return; // Aborting — table stays occupied
+    }
 
     // 1. Clear items + note
     clearOrder(tableId);
@@ -702,15 +717,17 @@ export function TableOrderSidebar({ tableId, tableNumber, mergedIds, onClose }: 
       parentTableId: null,
     });
 
-    // 3. Free merged children
-    const children = tables.filter(t => t.parentTableId === tableId);
-    for (const child of children) {
-      await updateTable(child.id, {
-        status: "libre",
-        occupiedSince: null as any,
-        orderTotal: 0,
-        parentTableId: null
-      });
+    // 3. Free merged children (only relevant for table orders, not emporter)
+    if (!isEmporter) {
+      const children = tables.filter(t => t.parentTableId === tableId);
+      for (const child of children) {
+        await updateTable(child.id, {
+          status: "libre",
+          occupiedSince: null as any,
+          orderTotal: 0,
+          parentTableId: null
+        });
+      }
     }
 
     // --- IMPRESSION CAISSE ---
@@ -721,7 +738,7 @@ export function TableOrderSidebar({ tableId, tableNumber, mergedIds, onClose }: 
         toast.warning("Aucune imprimante de caisse configurée.");
       }
       for (const printer of cashierPrinters) {
-        printerService.printReceipt(printer, itemsToPrint, totalToPrint, tableNumber, []).catch(err => {
+        printerService.printReceipt(printer, itemsToPrint, totalToPrint, receiptLabel, []).catch(err => {
           console.error("Erreur d'impression caisse:", err);
           toast.error("Erreur d'impression caisse", { description: err.message });
         });

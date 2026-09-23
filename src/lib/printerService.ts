@@ -282,10 +282,13 @@ export const printerService = {
     ticket += SEP;
 
     for (const item of items) {
-      const lineTotalVal = lineTotal(item);
-      const unitPrice = lineTotalVal / item.quantity;
-      const puStr = formatNumber(unitPrice);
-      const totStr = formatNumber(lineTotalVal);
+      let basePrice = item.selectedOption ? item.selectedOption.price : item.product.price;
+      if (item.customPrice !== undefined) {
+        basePrice = item.customPrice;
+      }
+      const productTotal = basePrice * item.quantity;
+      const puStr = formatNumber(basePrice);
+      const totStr = formatNumber(productTotal);
       
       // Nom du produit + variante sur la même ligne si possible
       let name = item.product.name;
@@ -318,7 +321,7 @@ export const printerService = {
       }
 
       for (const sup of item.supplements) {
-        ticket += `    + ${sup.label}\n`;
+        ticket += justify(`    + ${sup.label}`, formatNumber(sup.price), LINE_WIDTH) + "\n";
       }
     }
 

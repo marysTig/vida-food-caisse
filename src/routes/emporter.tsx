@@ -98,9 +98,22 @@ function EmporterPage() {
     
     // Récupérer les items avant de clear
     const itemsToPrint = orders[checkoutTable.id] || [];
-    
-    // Enregistrer dans l'historique du Rapport Z (supplements are embedded in each item)
-    recordZReport(itemsToPrint, "emporter", checkoutTable.number, []);
+
+    // Guard: ne pas encaisser si les items sont vides (race condition Supabase/Zustand)
+    if (itemsToPrint.length === 0) {
+      toast.error("Impossible d'encaisser : la commande est vide. Veuillez patienter un instant et réessayer.", { duration: 5000 });
+      return;
+    }
+
+    // Enregistrer dans l'historique du Rapport Z (AVANT de vider l'ordre)
+    // Si le Z Report échoue, on arrête ici pour ne pas perdre la vente.
+    try {
+      await recordZReport(itemsToPrint, "emporter", checkoutTable.number, []);
+    } catch (err) {
+      console.error("[EMPORTER CHECKOUT] Z Report a échoué — paiement annulé:", err);
+      toast.error("Erreur d'enregistrement du Rapport Z. Paiement non finalisé.", { duration: 7000 });
+      return; // Aborting — order stays open
+    }
 
     clearOrder(checkoutTable.id);
     await updateTable(checkoutTable.id, {

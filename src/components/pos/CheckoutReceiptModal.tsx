@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
   X,
@@ -18,7 +18,7 @@ type CheckoutReceiptModalProps = {
   orderNote?: string | undefined;
   globalSupplements: GlobalSupplement[];
   onClose: () => void;
-  onConfirm: () => void;
+  onConfirm: () => void | Promise<void>;
 };
 
 export function CheckoutReceiptModal({
@@ -31,6 +31,7 @@ export function CheckoutReceiptModal({
   onConfirm,
 }: CheckoutReceiptModalProps) {
   const confirmRef = useRef<HTMLButtonElement>(null);
+  const [isProcessing, setIsProcessing] = useState(false);
   const supplementsTotal = globalSupplements.reduce((sum, s) => sum + s.price, 0);
   const subtotal = cartSubtotal(items) + supplementsTotal;
   const itemCount = items.reduce((s, i) => s + i.quantity, 0);
@@ -241,12 +242,21 @@ export function CheckoutReceiptModal({
           <button
             ref={confirmRef}
             type="button"
-            onClick={onConfirm}
-            className="flex w-full items-center justify-center gap-2.5 rounded-2xl bg-success py-4 text-base font-bold text-success-foreground shadow-lg transition-all active:scale-[0.98]"
+            disabled={items.length === 0 || isProcessing}
+            onClick={async () => {
+              if (items.length === 0 || isProcessing) return;
+              setIsProcessing(true);
+              try {
+                await onConfirm();
+              } finally {
+                setIsProcessing(false);
+              }
+            }}
+            className="flex w-full items-center justify-center gap-2.5 rounded-2xl bg-success py-4 text-base font-bold text-success-foreground shadow-lg transition-all active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed"
           >
             <CreditCard className="h-5 w-5" />
-            Encaisser
-            <CheckCircle2 className="h-4 w-4 opacity-80" />
+            {isProcessing ? "Traitement..." : "Encaisser"}
+            {!isProcessing && <CheckCircle2 className="h-4 w-4 opacity-80" />}
           </button>
         </div>
       </div>
