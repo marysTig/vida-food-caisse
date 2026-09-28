@@ -114,7 +114,7 @@ export async function runCashierReceiptPrint(params: {
         tableId: String(tableId),
       },
       timestamp: Date.now(),
-      runId: "caisse-pre",
+      runId: "caisse-post",
     }),
   }).catch(() => {});
   console.log("[DBG c5e869] E · receipt_enqueued", result);

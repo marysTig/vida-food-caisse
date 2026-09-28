@@ -45,7 +45,7 @@ function dbg(
     message,
     data,
     timestamp: Date.now(),
-    runId: "caisse-pre",
+    runId: "caisse-post",
   };
   console.log(`[DBG c5e869] ${hypothesisId} · ${message}`, data);
   fetch("http://127.0.0.1:7680/ingest/b490126b-dfa2-4a19-9733-3902cacf3768", {
@@ -83,6 +83,19 @@ export function wakePrintQueueDaemon() {
 }
 
 async function waitInterPrinterGap(nextMac: string, jobType?: string): Promise<number> {
+  // Caisse must be momentary — never burn 4s MAC gap on receipt jobs
+  if (jobType === "receipt") {
+    // #region agent log
+    dbg("A", "printQueueDaemon.ts:waitInterPrinterGap", "gap_skipped", {
+      jobType,
+      lastSuccessMac,
+      nextMac,
+      reason: "receipt_momentary",
+    });
+    // #endregion
+    return 0;
+  }
+
   if (!lastSuccessMac || lastSuccessMac === nextMac) {
     // #region agent log
     dbg("A", "printQueueDaemon.ts:waitInterPrinterGap", "gap_skipped", {
@@ -105,7 +118,21 @@ async function waitInterPrinterGap(nextMac: string, jobType?: string): Promise<n
     gapMs: INTER_PRINTER_GAP_MS,
   });
   // #endregion
-  await sleep(INTER_PRINTER_GAP_MS);
+
+  // Interruptible: if a receipt arrives mid-gap, abort kitchen so caisse runs now
+  const deadline = Date.now() + INTER_PRINTER_GAP_MS;
+  while (Date.now() < deadline) {
+    if (kitchenAbort?.signal.aborted || (await hasPendingReceiptJob())) {
+      // #region agent log
+      dbg("C", "printQueueDaemon.ts:waitInterPrinterGap", "gap_aborted_for_receipt", {
+        jobType,
+        waitedMs: INTER_PRINTER_GAP_MS - (deadline - Date.now()),
+      });
+      // #endregion
+      throw new KitchenAbortedError();
+    }
+    await sleep(Math.min(250, deadline - Date.now()));
+  }
   return INTER_PRINTER_GAP_MS;
 }
 
@@ -115,19 +142,26 @@ async function sendJobBytes(job: PrintJob, data: Uint8Array): Promise<"ok" | "ab
   if (!mac) throw new Error("Adresse MAC manquante");
 
   const t0 = Date.now();
-  const gapMs = await waitInterPrinterGap(mac, job.job_type);
+  let gapMs = 0;
+  try {
+    gapMs = await waitInterPrinterGap(mac, job.job_type);
+  } catch (err) {
+    if (err instanceof KitchenAbortedError) return "aborted";
+    throw err;
+  }
 
   if (job.job_type === "receipt") {
     const { release } = await acquireReceiptRadio(`daemon-receipt:${job.id}`);
     const tAfterAcquire = Date.now();
     try {
-      // Timeout owned solely by nativeSendEscPos (BT_OP_TIMEOUT_MS after settle)
+      // Momentary caisse: skip trailing settle (acquire already settled once)
       await nativeSendEscPos({
         priority: "receipt",
         printerName: name,
         macAddress: mac,
         data,
         skipPreSettle: true,
+        skipPostSettle: true,
       });
       lastSuccessMac = mac;
       // #region agent log
@@ -140,6 +174,7 @@ async function sendJobBytes(job: PrintJob, data: Uint8Array): Promise<"ok" | "ab
         sendMs: Date.now() - tAfterAcquire,
         totalMs: Date.now() - t0,
         bytes: data.byteLength,
+        momentary: true,
       });
       // #endregion
       return "ok";
@@ -157,12 +192,12 @@ async function sendJobBytes(job: PrintJob, data: Uint8Array): Promise<"ok" | "ab
       throw err;
     } finally {
       release();
-      const tPost = Date.now();
-      await hardSettleRadio(`post-receipt:${name}`);
+      // No second hardSettle — native disconnect already closed the socket
       // #region agent log
       dbg("B", "printQueueDaemon.ts:sendJobBytes", "receipt_post_settle", {
         jobId: job.id,
-        postSettleMs: Date.now() - tPost,
+        postSettleMs: 0,
+        skipped: true,
       });
       // #endregion
     }
@@ -172,7 +207,19 @@ async function sendJobBytes(job: PrintJob, data: Uint8Array): Promise<"ok" | "ab
   const ac = new AbortController();
   kitchenAbort = ac;
   currentKitchenJobId = job.id;
-  const { signal, release } = await acquireKitchenRadio(`daemon-kitchen:${job.id}`);
+
+  let signal: AbortSignal;
+  let release: () => void;
+  try {
+    const session = await acquireKitchenRadio(`daemon-kitchen:${job.id}`);
+    signal = session.signal;
+    release = session.release;
+  } catch (err) {
+    kitchenAbort = null;
+    currentKitchenJobId = null;
+    if (err instanceof KitchenAbortedError) return "aborted";
+    throw err;
+  }
 
   const combined = new AbortController();
   const forward = () => {
