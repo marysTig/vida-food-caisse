@@ -5,7 +5,8 @@
  */
 
 export const BT_HARD_SETTLE_MS = 1500;
-export const BT_OP_TIMEOUT_MS = 3000;
+/** Connect+write budget after settle (sole timeout owner for daemon jobs). */
+export const BT_OP_TIMEOUT_MS = 8000;
 export const BT_PRE_DISCONNECT_DRAIN_MS = 350;
 /** Max wait for disconnect callback before continuing settle. */
 export const BT_DISCONNECT_CALLBACK_CAP_MS = 500;

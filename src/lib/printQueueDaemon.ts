@@ -31,9 +31,6 @@ import { getLocalPrintDeviceId } from "@/lib/printDevice";
 import { isLocalDevicePrimaryHub } from "@/lib/printSettingsStore";
 import { logPrintActivity, updatePrintActivity } from "@/lib/printActivityLog";
 
-/** Fail-fast connect+write budget (plan: 2s). */
-const JOB_TIMEOUT_MS = 2000;
-
 let lastSuccessMac: string | null = null;
 let draining = false;
 let currentKitchenJobId: string | null = null;
@@ -74,25 +71,15 @@ async function sendJobBytes(job: PrintJob, data: Uint8Array): Promise<"ok" | "ab
 
   if (job.job_type === "receipt") {
     const { release } = await acquireReceiptRadio(`daemon-receipt:${job.id}`);
-    const timedOut = { current: false };
     try {
-      await Promise.race([
-        nativeSendEscPos({
-          priority: "receipt",
-          printerName: name,
-          macAddress: mac,
-          data,
-          skipPreSettle: true,
-        }),
-        sleep(JOB_TIMEOUT_MS).then(async () => {
-          timedOut.current = true;
-          await forceDisconnectNative(`timeout-receipt:${name}`);
-          throw new Error(`Délai ${JOB_TIMEOUT_MS}ms dépassé (${name})`);
-        }),
-      ]);
-      if (timedOut.current) {
-        throw new Error(`Délai ${JOB_TIMEOUT_MS}ms dépassé (${name})`);
-      }
+      // Timeout owned solely by nativeSendEscPos (BT_OP_TIMEOUT_MS after settle)
+      await nativeSendEscPos({
+        priority: "receipt",
+        printerName: name,
+        macAddress: mac,
+        data,
+        skipPreSettle: true,
+      });
       lastSuccessMac = mac;
       return "ok";
     } finally {
@@ -108,7 +95,6 @@ async function sendJobBytes(job: PrintJob, data: Uint8Array): Promise<"ok" | "ab
   const { signal, release } = await acquireKitchenRadio(`daemon-kitchen:${job.id}`);
 
   const combined = new AbortController();
-  let timedOut = false;
   const forward = () => {
     if (!combined.signal.aborted) combined.abort();
     void forceDisconnectNative(`kitchen-abort:${name}`);
@@ -120,32 +106,20 @@ async function sendJobBytes(job: PrintJob, data: Uint8Array): Promise<"ok" | "ab
     if (await hasPendingReceiptJob()) {
       throw new KitchenAbortedError();
     }
-    await Promise.race([
-      nativeSendEscPos({
-        priority: "kitchen",
-        signal: combined.signal,
-        printerName: name,
-        macAddress: mac,
-        data,
-      }),
-      sleep(JOB_TIMEOUT_MS).then(async () => {
-        timedOut = true;
-        forward();
-        throw new Error(`Délai ${JOB_TIMEOUT_MS}ms dépassé (${name})`);
-      }),
-    ]);
+    await nativeSendEscPos({
+      priority: "kitchen",
+      signal: combined.signal,
+      printerName: name,
+      macAddress: mac,
+      data,
+    });
     lastSuccessMac = mac;
     return "ok";
   } catch (err) {
-    if (timedOut) {
-      throw err instanceof Error
-        ? err
-        : new Error(`Délai ${JOB_TIMEOUT_MS}ms dépassé (${name})`);
-    }
     if (
       err instanceof KitchenAbortedError ||
       ac.signal.aborted ||
-      (combined.signal.aborted && !timedOut)
+      combined.signal.aborted
     ) {
       return "aborted";
     }
