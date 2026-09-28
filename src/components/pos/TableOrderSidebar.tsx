@@ -441,6 +441,36 @@ export function TableOrderSidebar({ tableId, tableNumber, mergedIds, onClose }: 
   const [activeSupplementItem, setActiveSupplementItem] = useState<CartItem | null>(null);
   const [checkoutOpen, setCheckoutOpen] = useState(false);
 
+  // When the Cashier opens the checkout modal for a server-created order, items may
+  // not yet be in Zustand (async fetch still running). Re-fetch from Supabase to ensure
+  // the modal has the correct items before the user confirms.
+  useEffect(() => {
+    if (!checkoutOpen || !isOccupied || isServeur) return;
+    let mounted = true;
+    const fetchIfEmpty = async () => {
+      // Only re-fetch if Zustand doesn't have items yet
+      const currentItems = useTableOrdersStore.getState().orders[tableId];
+      if (currentItems && currentItems.length > 0) return;
+      try {
+        const { data, error } = await supabase
+          .from("table_orders")
+          .select("items, note, global_supplements")
+          .eq("table_id", tableId)
+          .maybeSingle();
+        if (error || !data) return;
+        if (mounted && data.items && (data.items as CartItem[]).length > 0) {
+          _patchOrder(tableId, data.items as CartItem[]);
+          _patchNote(tableId, data.note || "");
+          _patchSupplements(tableId, ((data as any).global_supplements as GlobalSupplement[]) || []);
+        }
+      } catch (err) {
+        console.error("[CHECKOUT OPEN] Fetch items failed:", err);
+      }
+    };
+    void fetchIfEmpty();
+    return () => { mounted = false; };
+  }, [checkoutOpen, tableId, isOccupied, isServeur, _patchOrder, _patchNote, _patchSupplements]);
+
   // Mobile: panier ouvert ou fermé (bottom panel)
   // If the table is already occupied, we might want to open the cart by default to see the order
   const [cartOpen, setCartOpen] = useState(isOccupied);
@@ -640,12 +670,16 @@ export function TableOrderSidebar({ tableId, tableNumber, mergedIds, onClose }: 
             tableNumber: isEmporter ? `EMPORTER #${tableNumber}` : tableNumber,
             items,
             orderNote,
-            globalSupplements: []
+            // BUG FIX: pass activeSupplements, not hardcoded []
+            globalSupplements: activeSupplements,
           }).then(() => {
             console.log("[SERVER ORDER] Broadcast sent successfully");
+            // Remove guard ONLY after broadcast resolves, so a retry cannot slip through
+            _kitchenPrintedSet.delete(tableId);
           }).catch(err => {
             console.error("[SERVER ORDER] Failed to broadcast:", err);
             toast.error("Erreur de connexion pour l'impression cuisine.");
+            _kitchenPrintedSet.delete(tableId);
           });
         } else {
           // La Caisse imprime directement sans passer par le Hub
@@ -660,13 +694,15 @@ export function TableOrderSidebar({ tableId, tableNumber, mergedIds, onClose }: 
             for (const printer of kitchenPrinters) {
               console.log(`[CAISSE PRINT] Printing to ${printer.name}`);
               try {
-                await printerService.printKitchen(printer, items, kitchenOrderLabel, orderNote, []);
+                // BUG FIX: pass activeSupplements, not hardcoded []
+                await printerService.printKitchen(printer, items, kitchenOrderLabel, orderNote, activeSupplements);
                 console.log(`[CAISSE PRINT] Print success for ${printer.name}`);
               } catch (err: any) {
                 console.error(`[Cuisine] Erreur impression ${printer.name}:`, err);
                 toast.error(`Erreur d'impression cuisine (${printer.name})`, { description: err.message });
               }
             }
+            _kitchenPrintedSet.delete(tableId);
           })();
           console.log(`[Cuisine] Impression directe lancée pour table ${tableId} (${kitchenPrinters.length} imprimante(s)).`);
         }
@@ -675,11 +711,10 @@ export function TableOrderSidebar({ tableId, tableNumber, mergedIds, onClose }: 
       }
     } catch (err) {
       console.error("Impossible de lancer l'impression cuisine", err);
+      _kitchenPrintedSet.delete(tableId);
     }
     // ------------------------------------------
 
-    // Nettoyer le guard — le sidebar va se fermer
-    _kitchenPrintedSet.delete(tableId);
     onClose();
   };
 
@@ -738,7 +773,7 @@ export function TableOrderSidebar({ tableId, tableNumber, mergedIds, onClose }: 
         toast.warning("Aucune imprimante de caisse configurée.");
       }
       for (const printer of cashierPrinters) {
-        printerService.printReceipt(printer, itemsToPrint, totalToPrint, receiptLabel, []).catch(err => {
+        printerService.printReceipt(printer, itemsToPrint, totalToPrint, receiptLabel, activeSupplements).catch(err => {
           console.error("Erreur d'impression caisse:", err);
           toast.error("Erreur d'impression caisse", { description: err.message });
         });
@@ -996,7 +1031,7 @@ export function TableOrderSidebar({ tableId, tableNumber, mergedIds, onClose }: 
         tableNumber={tableNumber}
         items={items}
         orderNote={orderNote || undefined}
-        globalSupplements={[]}
+        globalSupplements={activeSupplements}
         onClose={() => setCheckoutOpen(false)}
         onConfirm={async () => {
           setCheckoutOpen(false);

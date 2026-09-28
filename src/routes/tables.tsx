@@ -443,6 +443,7 @@ function TablesPage() {
     // Snapshot des items AVANT clearOrder
     const allIds = [checkoutTable.id, ...multiCheckoutTables];
     const itemsToPrint = allIds.flatMap(id => orders[id] ?? []);
+    const supplementsToPrint = allIds.flatMap(id => orderSupplements[id] ?? []);
     const totalToPrint = cartSubtotal(itemsToPrint);
     const tableNumber = checkoutTable.number;
     let tableNumberStr = String(tableNumber);
@@ -450,8 +451,23 @@ function TablesPage() {
       const numbers = tableData.filter(t => multiCheckoutTables.includes(t.id)).map(t => t.number).join(", ");
       tableNumberStr = `Tables ${numbers}`;
     }
+
+    // Guard: ne pas encaisser si les items sont vides (race condition Supabase/Zustand)
+    if (itemsToPrint.length === 0) {
+      toast.error("Commande vide — veuillez patienter un instant et réessayer.", { duration: 5000 });
+      return;
+    }
+
     // Enregistrer dans l'historique du Rapport Z (supplements are embedded in each item)
-    recordZReport(itemsToPrint, "table", tableNumberStr, []);
+    // Si le Z Report échoue, on arrête ici pour ne pas perdre la vente.
+    try {
+      await recordZReport(itemsToPrint, "table", tableNumberStr, []);
+    } catch (err) {
+      console.error("[TABLE CHECKOUT] Z Report a échoué — paiement annulé:", err);
+      toast.error("Erreur d'enregistrement du Rapport Z. Paiement non finalisé.", { duration: 7000 });
+      setCheckoutTable(null);
+      return;
+    }
 
     clearOrder(checkoutTable.id);
     await updateTable(checkoutTable.id, {
@@ -503,7 +519,7 @@ function TablesPage() {
     try {
       const cashierPrinters = printers.filter(p => p.enabled && p.type === "caisse");
       for (const printer of cashierPrinters) {
-        printerService.printReceipt(printer, itemsToPrint, totalToPrint, tableNumber, []).catch(err => {
+        printerService.printReceipt(printer, itemsToPrint, totalToPrint, tableNumberStr, supplementsToPrint).catch(err => {
           console.error("Erreur d'impression caisse:", err);
           toast.error("Erreur d'impression caisse", { description: err.message });
         });

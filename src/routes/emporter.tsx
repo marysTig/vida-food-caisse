@@ -96,8 +96,9 @@ function EmporterPage() {
   const handleQuickCheckout = async () => {
     if (!checkoutTable) return;
     
-    // Récupérer les items avant de clear
+    // Récupérer les items et les suppléments globaux avant de clear
     const itemsToPrint = orders[checkoutTable.id] || [];
+    const supplementsToPrint = orderSupplements[checkoutTable.id] || [];
 
     // Guard: ne pas encaisser si les items sont vides (race condition Supabase/Zustand)
     if (itemsToPrint.length === 0) {
@@ -130,7 +131,7 @@ function EmporterPage() {
         toast.warning("Aucune imprimante de caisse configurée.");
       }
       for (const printer of cashierPrinters) {
-        printerService.printReceipt(printer, itemsToPrint, cartSubtotal(itemsToPrint), `À EMPORTER — Commande #${checkoutTable.number}`, []).catch(err => {
+        printerService.printReceipt(printer, itemsToPrint, cartSubtotal(itemsToPrint), `À EMPORTER — Commande #${checkoutTable.number}`, supplementsToPrint).catch(err => {
           console.error("Erreur d'impression caisse:", err);
           toast.error("Erreur d'impression caisse", { description: err.message });
         });
@@ -145,6 +146,7 @@ function EmporterPage() {
 
   const checkoutItems = checkoutTable ? (orders[checkoutTable.id] ?? []) : [];
   const checkoutNote = checkoutTable ? (orderNotes[checkoutTable.id] ?? undefined) : undefined;
+  const checkoutSupplements = checkoutTable ? (orderSupplements[checkoutTable.id] ?? []) : [];
 
   return (
     <div className="flex h-screen overflow-hidden bg-background font-sans">
@@ -243,7 +245,7 @@ function EmporterPage() {
         tableNumber={`À EMPORTER — Commande #${checkoutTable?.number}`}
         items={checkoutItems}
         {...(checkoutNote ? { orderNote: checkoutNote } : {})}
-        globalSupplements={[]}
+        globalSupplements={checkoutSupplements}
         onClose={() => setCheckoutTable(null)}
         onConfirm={handleQuickCheckout}
       />
