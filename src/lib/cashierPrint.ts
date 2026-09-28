@@ -69,39 +69,6 @@ export async function runCashierReceiptPrint(params: {
     ...(globalSupplements?.length ? { globalSupplements } : {}),
   });
 
-  // #region agent log
-  fetch("http://127.0.0.1:7680/ingest/b490126b-dfa2-4a19-9733-3902cacf3768", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "X-Debug-Session-Id": "c5e869",
-    },
-    body: JSON.stringify({
-      sessionId: "c5e869",
-      hypothesisId: "E",
-      location: "cashierPrint.ts:enqueue",
-      message: "receipt_enqueued",
-      data: {
-        status: result.status,
-        jobId: result.status === "enqueued" ? result.jobId : null,
-        reason:
-          result.status === "noop"
-            ? result.reason
-            : result.status === "error"
-              ? result.message
-              : null,
-        printer: caisse.name,
-        mac,
-        label: String(label),
-        tableId,
-      },
-      timestamp: Date.now(),
-      runId: "caisse-post",
-    }),
-  }).catch(() => {});
-  console.log("[DBG c5e869] E · receipt_enqueued", result);
-  // #endregion
-
   if (result.status === "error") {
     errors.push(result.message);
     toast.error("Impossible de mettre le ticket en file", {

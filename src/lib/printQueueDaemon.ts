@@ -32,34 +32,6 @@ import { getLocalPrintDeviceId } from "@/lib/printDevice";
 import { isLocalDevicePrimaryHub } from "@/lib/printSettingsStore";
 import { logPrintActivity, updatePrintActivity } from "@/lib/printActivityLog";
 
-// #region agent log
-function dbg(
-  hypothesisId: string,
-  location: string,
-  message: string,
-  data: Record<string, unknown> = {},
-) {
-  const payload = {
-    sessionId: "c5e869",
-    hypothesisId,
-    location,
-    message,
-    data,
-    timestamp: Date.now(),
-    runId: "caisse-post",
-  };
-  console.log(`[DBG c5e869] ${hypothesisId} · ${message}`, data);
-  fetch("http://127.0.0.1:7680/ingest/b490126b-dfa2-4a19-9733-3902cacf3768", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "X-Debug-Session-Id": "c5e869",
-    },
-    body: JSON.stringify(payload),
-  }).catch(() => {});
-}
-// #endregion
-
 let lastSuccessMac: string | null = null;
 let draining = false;
 let currentKitchenJobId: string | null = null;
@@ -87,62 +59,23 @@ async function waitInterPrinterGap(nextMac: string, jobType?: string): Promise<n
   // Caisse: skip full 4s gap, but cool down briefly when switching MAC after kitchen
   if (jobType === "receipt") {
     if (lastSuccessMac && lastSuccessMac !== nextMac) {
-      // #region agent log
-      dbg("A", "printQueueDaemon.ts:waitInterPrinterGap", "gap_waiting", {
-        jobType,
-        lastSuccessMac,
-        nextMac,
-        gapMs: RECEIPT_MAC_COOLDOWN_MS,
-        reason: "receipt_mac_cooldown",
-      });
-      // #endregion
       await sleep(RECEIPT_MAC_COOLDOWN_MS);
       return RECEIPT_MAC_COOLDOWN_MS;
     }
-    // #region agent log
-    dbg("A", "printQueueDaemon.ts:waitInterPrinterGap", "gap_skipped", {
-      jobType,
-      lastSuccessMac,
-      nextMac,
-      reason: "receipt_momentary",
-    });
-    // #endregion
     return 0;
   }
 
   if (!lastSuccessMac || lastSuccessMac === nextMac) {
-    // #region agent log
-    dbg("A", "printQueueDaemon.ts:waitInterPrinterGap", "gap_skipped", {
-      jobType,
-      lastSuccessMac,
-      nextMac,
-      reason: !lastSuccessMac ? "no_last" : "same_mac",
-    });
-    // #endregion
     return 0;
   }
   console.log(
     `[PRINT DAEMON] Inter-printer gap ${INTER_PRINTER_GAP_MS}ms (${lastSuccessMac} → ${nextMac})`,
   );
-  // #region agent log
-  dbg("A", "printQueueDaemon.ts:waitInterPrinterGap", "gap_waiting", {
-    jobType,
-    lastSuccessMac,
-    nextMac,
-    gapMs: INTER_PRINTER_GAP_MS,
-  });
-  // #endregion
 
   // Interruptible: if a receipt arrives mid-gap, abort kitchen so caisse runs now
   const deadline = Date.now() + INTER_PRINTER_GAP_MS;
   while (Date.now() < deadline) {
     if (kitchenAbort?.signal.aborted || (await hasPendingReceiptJob())) {
-      // #region agent log
-      dbg("C", "printQueueDaemon.ts:waitInterPrinterGap", "gap_aborted_for_receipt", {
-        jobType,
-        waitedMs: INTER_PRINTER_GAP_MS - (deadline - Date.now()),
-      });
-      // #endregion
       throw new KitchenAbortedError();
     }
     await sleep(Math.min(250, deadline - Date.now()));
@@ -155,10 +88,8 @@ async function sendJobBytes(job: PrintJob, data: Uint8Array): Promise<"ok" | "ab
   const name = job.printer_name ?? "imprimante";
   if (!mac) throw new Error("Adresse MAC manquante");
 
-  const t0 = Date.now();
-  let gapMs = 0;
   try {
-    gapMs = await waitInterPrinterGap(mac, job.job_type);
+    await waitInterPrinterGap(mac, job.job_type);
   } catch (err) {
     if (err instanceof KitchenAbortedError) return "aborted";
     throw err;
@@ -166,7 +97,6 @@ async function sendJobBytes(job: PrintJob, data: Uint8Array): Promise<"ok" | "ab
 
   if (job.job_type === "receipt") {
     const { release } = await acquireReceiptRadio(`daemon-receipt:${job.id}`);
-    const tAfterAcquire = Date.now();
     try {
       // Momentary caisse: skip trailing settle (acquire already settled once)
       await nativeSendEscPos({
@@ -178,42 +108,10 @@ async function sendJobBytes(job: PrintJob, data: Uint8Array): Promise<"ok" | "ab
         skipPostSettle: true,
       });
       lastSuccessMac = mac;
-      // #region agent log
-      dbg("B", "printQueueDaemon.ts:sendJobBytes", "receipt_send_ok", {
-        jobId: job.id,
-        name,
-        mac,
-        gapMs,
-        acquireMs: tAfterAcquire - t0 - gapMs,
-        sendMs: Date.now() - tAfterAcquire,
-        totalMs: Date.now() - t0,
-        bytes: data.byteLength,
-        momentary: true,
-      });
-      // #endregion
       return "ok";
-    } catch (err) {
-      // #region agent log
-      dbg("D", "printQueueDaemon.ts:sendJobBytes", "receipt_send_fail", {
-        jobId: job.id,
-        name,
-        mac,
-        gapMs,
-        totalMs: Date.now() - t0,
-        error: err instanceof Error ? err.message : String(err),
-      });
-      // #endregion
-      throw err;
     } finally {
       release();
       // No second hardSettle — native disconnect already closed the socket
-      // #region agent log
-      dbg("B", "printQueueDaemon.ts:sendJobBytes", "receipt_post_settle", {
-        jobId: job.id,
-        postSettleMs: 0,
-        skipped: true,
-      });
-      // #endregion
     }
   }
 
@@ -324,18 +222,6 @@ async function processJob(job: PrintJob): Promise<void> {
   console.log(
     `[PRINT DAEMON] ${job.job_type} → ${job.printer_name} (attempt ${job.attempt_count + 1})`,
   );
-  // #region agent log
-  const processStarted = Date.now();
-  dbg("C", "printQueueDaemon.ts:processJob", "job_start", {
-    jobId: job.id,
-    jobType: job.job_type,
-    printer: job.printer_name,
-    mac: job.mac_address,
-    attempt: job.attempt_count + 1,
-    lastSuccessMac,
-    kitchenBusy: !!currentKitchenJobId,
-  });
-  // #endregion
 
   try {
     const result = await sendJobBytes(job, data);
@@ -358,27 +244,10 @@ async function processJob(job: PrintJob): Promise<void> {
         job.payload.fingerprints,
       );
     }
-    // #region agent log
-    dbg("C", "printQueueDaemon.ts:processJob", "job_done", {
-      jobId: job.id,
-      jobType: job.job_type,
-      printer: job.printer_name,
-      durationMs: Date.now() - processStarted,
-    });
-    // #endregion
     console.log(`[PRINT DAEMON] Done ${job.id}`);
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
     console.error(`[PRINT DAEMON] Fail ${job.id}:`, message);
-    // #region agent log
-    dbg("D", "printQueueDaemon.ts:processJob", "job_fail", {
-      jobId: job.id,
-      jobType: job.job_type,
-      printer: job.printer_name,
-      durationMs: Date.now() - processStarted,
-      error: message,
-    });
-    // #endregion
     updatePrintActivity(activityId, { status: "error", detail: message });
     try {
       await hardSettleRadio(`job-fail:${job.printer_name}`);
