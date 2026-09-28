@@ -470,7 +470,6 @@ function TablesPage() {
       return;
     }
 
-    const checkoutTableId = checkoutTable.id;
     clearOrder(checkoutTable.id);
     await updateTable(checkoutTable.id, {
       status: "libre",
@@ -517,14 +516,13 @@ function TablesPage() {
 
     setCheckoutTable(null);
 
-    // --- IMPRESSION CAISSE (file d'attente — pas d'attente Bluetooth) ---
+    // --- IMPRESSION CAISSE (toujours déclenchée, logs + toasts visibles) ---
     await runCashierReceiptPrint({
       printers,
       items: itemsToPrint,
       total: totalToPrint,
       label: tableNumberStr,
       globalSupplements: supplementsToPrint,
-      tableId: checkoutTableId,
     });
     // -------------------------
   };
