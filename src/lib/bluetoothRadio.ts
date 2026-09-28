@@ -5,6 +5,8 @@
  */
 
 export const BT_HARD_SETTLE_MS = 1500;
+/** Extra cool-down after aborting a kitchen connect before opening caisse. */
+export const BT_RECEIPT_PREEMPT_EXTRA_MS = 1000;
 /** Connect+write budget after settle (sole timeout owner for daemon jobs). */
 export const BT_OP_TIMEOUT_MS = 8000;
 export const BT_PRE_DISCONNECT_DRAIN_MS = 350;
@@ -136,6 +138,7 @@ export async function acquireReceiptRadio(owner: string): Promise<{
   const gen = receiptGeneration;
   btLog("RECEIPT_PREEMPT", owner);
 
+  const preemptedKitchen = !!kitchenSession;
   if (kitchenSession) {
     btLog("KITCHEN_ABORT", `preempted by receipt · ${owner}`);
     kitchenSession.abortController.abort();
@@ -150,6 +153,11 @@ export async function acquireReceiptRadio(owner: string): Promise<{
   mode = "receipt";
   // Single hard settle here — nativeSendEscPos skips pre-settle when skipPreSettle
   await hardSettleRadio(`receipt-preempt:${owner}`);
+  // Hung kitchen connect leaves the adapter dirty — extra cool-down before caisse open
+  if (preemptedKitchen) {
+    btLog("RECEIPT_PREEMPT_EXTRA", `${BT_RECEIPT_PREEMPT_EXTRA_MS}ms`);
+    await sleep(BT_RECEIPT_PREEMPT_EXTRA_MS);
+  }
 
   let released = false;
   return {

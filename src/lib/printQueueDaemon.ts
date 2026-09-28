@@ -16,6 +16,7 @@ import {
 import { base64ToUint8 } from "@/lib/escposTickets";
 import {
   INTER_PRINTER_GAP_MS,
+  RECEIPT_MAC_COOLDOWN_MS,
   claimNextPrintJob,
   enqueueConsolKitchenJob,
   hasPendingReceiptJob,
@@ -83,8 +84,21 @@ export function wakePrintQueueDaemon() {
 }
 
 async function waitInterPrinterGap(nextMac: string, jobType?: string): Promise<number> {
-  // Caisse must be momentary — never burn 4s MAC gap on receipt jobs
+  // Caisse: skip full 4s gap, but cool down briefly when switching MAC after kitchen
   if (jobType === "receipt") {
+    if (lastSuccessMac && lastSuccessMac !== nextMac) {
+      // #region agent log
+      dbg("A", "printQueueDaemon.ts:waitInterPrinterGap", "gap_waiting", {
+        jobType,
+        lastSuccessMac,
+        nextMac,
+        gapMs: RECEIPT_MAC_COOLDOWN_MS,
+        reason: "receipt_mac_cooldown",
+      });
+      // #endregion
+      await sleep(RECEIPT_MAC_COOLDOWN_MS);
+      return RECEIPT_MAC_COOLDOWN_MS;
+    }
     // #region agent log
     dbg("A", "printQueueDaemon.ts:waitInterPrinterGap", "gap_skipped", {
       jobType,

@@ -24,6 +24,8 @@ export const PRIORITY_KITCHEN = 10;
 export const MAX_PRINT_ATTEMPTS = 3;
 export const RETRY_BACKOFF_MS = 2500;
 export const INTER_PRINTER_GAP_MS = 4000;
+/** Short cool-down when caisse switches MAC (not the full 4s kitchen gap). */
+export const RECEIPT_MAC_COOLDOWN_MS = 1500;
 
 export type PrintJobType = "kitchen" | "receipt";
 export type PrintJobStatus =
