@@ -2,8 +2,9 @@ import { toast } from "sonner";
 import type { CartItem } from "@/lib/cart";
 import type { GlobalSupplement } from "@/lib/globalSupplementsStore";
 import type { Printer } from "@/lib/printerStore";
-import { printerService } from "@/lib/printerService";
-import { logPrintActivity, updatePrintActivity } from "@/lib/printActivityLog";
+import { enqueueReceipt } from "@/lib/kitchenPrintQueue";
+import { logPrintActivity } from "@/lib/printActivityLog";
+import { wakePrintQueueDaemon } from "@/lib/printQueueDaemon";
 
 export type CashierPrintResult = {
   attempted: number;
@@ -12,8 +13,8 @@ export type CashierPrintResult = {
 };
 
 /**
- * Always-on caisse receipt path for Encaisser.
- * Validates MAC, logs activity for Admin, surfaces toasts — never silent no-op.
+ * Encaisser: enqueue receipt only — never awaits Bluetooth.
+ * PrintQueueDaemon prints asynchronously with receipt priority.
  */
 export async function runCashierReceiptPrint(params: {
   printers: Printer[];
@@ -21,25 +22,16 @@ export async function runCashierReceiptPrint(params: {
   total: number;
   label: string | number;
   globalSupplements?: GlobalSupplement[];
+  tableId?: string;
 }): Promise<CashierPrintResult> {
   const { items, total, label, globalSupplements } = params;
   const errors: string[] = [];
-  let succeeded = 0;
 
-  console.log("[CAISSE PRINT] Encaisser — starting receipt flow", {
+  console.log("[CAISSE PRINT] Enqueue receipt (non-blocking)", {
     itemCount: items.length,
     total,
     label,
-    printerCount: params.printers.length,
   });
-
-  if (!printerService.isNativePlatform()) {
-    const msg =
-      "Bluetooth natif indisponible (plugin non chargé). Relancez l'app Android Capacitor.";
-    console.error("[CAISSE PRINT]", msg);
-    toast.error("Impression caisse impossible", { description: msg, duration: 8000 });
-    return { attempted: 0, succeeded: 0, errors: [msg] };
-  }
 
   const cashierPrinters = params.printers.filter(
     (p) => p.enabled && p.type === "caisse",
@@ -48,81 +40,62 @@ export async function runCashierReceiptPrint(params: {
   if (cashierPrinters.length === 0) {
     const msg =
       "Aucune imprimante type « caisse » activée. Configurez-en une dans Admin → Imprimantes.";
-    console.error("[CAISSE PRINT]", msg, {
-      all: params.printers.map((p) => ({
-        name: p.name,
-        type: p.type,
-        enabled: p.enabled,
-        mac: p.mac_address,
-      })),
+    console.error("[CAISSE PRINT]", msg);
+    toast.error("Impression caisse impossible", {
+      description: msg,
+      duration: 8000,
     });
-    toast.error("Impression caisse impossible", { description: msg, duration: 8000 });
     return { attempted: 0, succeeded: 0, errors: [msg] };
   }
 
-  toast.info("Impression du ticket caisse…", { duration: 2500 });
-
-  for (const printer of cashierPrinters) {
-    const mac = (printer.mac_address ?? "").trim();
-    if (!mac) {
-      const msg = `${printer.name}: adresse MAC manquante — associez l'imprimante Bluetooth.`;
-      console.error("[CAISSE PRINT]", msg);
-      errors.push(msg);
-      logPrintActivity({
-        kind: "caisse",
-        printerName: printer.name,
-        mac: null,
-        status: "error",
-        detail: msg,
-      });
-      toast.error("MAC manquante (caisse)", { description: msg, duration: 7000 });
-      continue;
-    }
-
-    const activityId = logPrintActivity({
-      kind: "caisse",
-      printerName: printer.name,
-      mac,
-      status: "started",
-      detail: `Ticket ${label}`,
-    });
-
-    console.log("[CAISSE PRINT] Firing printReceiptIsolated", {
-      name: printer.name,
-      mac,
-      bytesHint: items.length,
-    });
-
-    try {
-      await printerService.printReceiptIsolated(
-        printer,
-        items,
-        total,
-        label,
-        globalSupplements,
-      );
-      succeeded += 1;
-      updatePrintActivity(activityId, {
-        status: "success",
-        detail: `OK · ${label}`,
-      });
-      console.log("[CAISSE PRINT] Success", printer.name);
-      toast.success(`Ticket caisse imprimé (${printer.name})`);
-    } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : String(err);
-      errors.push(`${printer.name}: ${message}`);
-      updatePrintActivity(activityId, { status: "error", detail: message });
-      console.error("[CAISSE PRINT] Failed", printer.name, message);
-      toast.error("Erreur d'impression caisse", {
-        description: `${printer.name}: ${message}`,
-        duration: 8000,
-      });
-    }
+  const caisse = cashierPrinters[0]!;
+  const mac = (caisse.mac_address ?? "").trim();
+  if (!mac) {
+    const msg = `${caisse.name}: adresse MAC manquante — associez l'imprimante Bluetooth.`;
+    toast.error("MAC manquante (caisse)", { description: msg, duration: 7000 });
+    return { attempted: 1, succeeded: 0, errors: [msg] };
   }
 
-  return {
-    attempted: cashierPrinters.length,
-    succeeded,
-    errors,
-  };
+  const tableId =
+    params.tableId ??
+    `receipt-${typeof label === "string" || typeof label === "number" ? label : "x"}`;
+
+  const result = await enqueueReceipt({
+    tableId: String(tableId),
+    orderLabel: label,
+    items,
+    total,
+    printers: params.printers,
+    ...(globalSupplements?.length ? { globalSupplements } : {}),
+  });
+
+  if (result.status === "error") {
+    errors.push(result.message);
+    toast.error("Impossible de mettre le ticket en file", {
+      description: result.message,
+    });
+    return { attempted: 1, succeeded: 0, errors };
+  }
+
+  if (result.status === "noop" && result.reason === "no_printer") {
+    const msg = "Aucune imprimante caisse avec MAC.";
+    toast.error("Impression caisse impossible", { description: msg });
+    return { attempted: 0, succeeded: 0, errors: [msg] };
+  }
+
+  logPrintActivity({
+    kind: "caisse",
+    printerName: caisse.name,
+    mac,
+    status: "started",
+    detail: `En file · ${label}`,
+  });
+
+  wakePrintQueueDaemon();
+  toast.success("Ticket en file d'impression", {
+    description: caisse.name,
+    duration: 2500,
+  });
+
+  return { attempted: 1, succeeded: 1, errors: [] };
 }

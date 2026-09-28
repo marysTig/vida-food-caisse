@@ -17,9 +17,10 @@ import appCss from "../styles.css?url";
 import { reportLovableError } from "../lib/lovable-error-reporting";
 import { PageLoader } from "../components/ui/PageLoader";
 import {
-  KitchenPrintWorker,
+  PrintQueueDaemon,
   getKitchenPrintRealtimeManager,
-} from "../components/pos/KitchenPrintWorker";
+} from "../components/pos/PrintQueueDaemon";
+import { PrintFailureBanner } from "../components/pos/PrintFailureBanner";
 import { useSessionStore } from "../lib/authStore";
 import { usePrintSettingsStore } from "../lib/printSettingsStore";
 
@@ -185,8 +186,13 @@ function RootComponent() {
     <QueryClientProvider client={queryClient}>
       {/* Required: nested routes render here. Removing <Outlet /> breaks all child routes. */}
       <Outlet />
-      {/* Kitchen print worker: only the primary hub device executes Bluetooth jobs */}
-      {currentUser && <KitchenPrintWorker />}
+      {/* Print queue daemon (primary hub) + POS failure banner */}
+      {currentUser && (
+        <>
+          <PrintQueueDaemon />
+          <PrintFailureBanner />
+        </>
+      )}
     </QueryClientProvider>
   );
 }

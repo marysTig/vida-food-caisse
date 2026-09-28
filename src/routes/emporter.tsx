@@ -122,13 +122,14 @@ function EmporterPage() {
       occupiedSince: null as any,
     });
     
-    // --- IMPRESSION CAISSE (toujours déclenchée, logs + toasts visibles) ---
+    // --- IMPRESSION CAISSE (file d'attente — pas d'attente Bluetooth) ---
     await runCashierReceiptPrint({
       printers,
       items: itemsToPrint,
       total: cartSubtotal(itemsToPrint),
       label: `À EMPORTER — Commande #${checkoutTable.number}`,
       globalSupplements: supplementsToPrint,
+      tableId: checkoutTable.id,
     });
     // -------------------------
 

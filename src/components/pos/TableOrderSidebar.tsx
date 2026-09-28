@@ -17,6 +17,7 @@ import { supabase } from "@/lib/supabase";
 import { usePrinterStore } from "@/lib/printerStore";
 import { enqueueKitchenPrint } from "@/lib/kitchenPrintQueue";
 import { runCashierReceiptPrint } from "@/lib/cashierPrint";
+import { wakePrintQueueDaemon } from "@/lib/printQueueDaemon";
 import { toast } from "sonner";
 import { ComponentLoader } from "@/components/ui/PageLoader";
 import { recordZReport } from "@/lib/zReport";
@@ -670,6 +671,7 @@ export function TableOrderSidebar({ tableId, tableNumber, mergedIds, onClose }: 
         });
       } else if (result.status === "enqueued") {
         toast.success(isOccupied ? "Mise à jour envoyée en cuisine" : "Commande envoyée en cuisine");
+        wakePrintQueueDaemon();
       } else if (result.status === "noop" && result.reason === "empty_delta") {
         // Rien de nouveau — silence volontaire (évite le bruit sur double-valider)
         console.log("[KITCHEN] No delta to print for", tableId);
@@ -731,13 +733,14 @@ export function TableOrderSidebar({ tableId, tableNumber, mergedIds, onClose }: 
       }
     }
 
-    // --- IMPRESSION CAISSE (toujours déclenchée, logs + toasts visibles) ---
+    // --- IMPRESSION CAISSE (file d'attente — pas d'attente Bluetooth) ---
     await runCashierReceiptPrint({
       printers,
       items: itemsToPrint,
       total: totalToPrint,
       label: receiptLabel,
       globalSupplements: activeSupplements,
+      tableId,
     });
 
     onClose();
@@ -762,6 +765,7 @@ export function TableOrderSidebar({ tableId, tableNumber, mergedIds, onClose }: 
         toast.error("Réimpression cuisine impossible", { description: result.message });
       } else if (result.status === "enqueued") {
         toast.success("Réimpression cuisine envoyée");
+        wakePrintQueueDaemon();
       } else if (result.status === "noop" && result.reason === "empty_delta") {
         toast.info("Rien de nouveau à imprimer en cuisine");
       } else {

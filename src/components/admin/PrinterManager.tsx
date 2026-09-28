@@ -461,7 +461,7 @@ export function PrinterManager() {
                   <span className="text-muted-foreground">
                     {new Date(j.created_at).toLocaleString("fr-FR")}
                   </span>
-                  {j.status === "failed" && (
+                  {j.status === "needs_manual" && (
                     <button
                       type="button"
                       className="rounded border border-border px-2 py-0.5 text-[10px] font-semibold hover:bg-muted"
