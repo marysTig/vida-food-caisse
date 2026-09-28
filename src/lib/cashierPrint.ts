@@ -92,6 +92,33 @@ export async function runCashierReceiptPrint(params: {
   });
 
   wakePrintQueueDaemon();
+  // #region agent log
+  fetch("http://127.0.0.1:7680/ingest/b490126b-dfa2-4a19-9733-3902cacf3768", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "X-Debug-Session-Id": "c5e869",
+    },
+    body: JSON.stringify({
+      sessionId: "c5e869",
+      hypothesisId: "E",
+      location: "cashierPrint.ts:enqueue",
+      message: "receipt_enqueued",
+      data: {
+        status: result.status,
+        jobId: result.status === "enqueued" ? result.jobId : null,
+        reason: result.status === "noop" ? result.reason : null,
+        printer: caisse.name,
+        mac,
+        label: String(label),
+        tableId: String(tableId),
+      },
+      timestamp: Date.now(),
+      runId: "caisse-pre",
+    }),
+  }).catch(() => {});
+  console.log("[DBG c5e869] E · receipt_enqueued", result);
+  // #endregion
   toast.success("Ticket en file d'impression", {
     description: caisse.name,
     duration: 2500,
