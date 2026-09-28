@@ -19,6 +19,7 @@ type CheckoutReceiptModalProps = {
   globalSupplements: GlobalSupplement[];
   onClose: () => void;
   onConfirm: () => void | Promise<void>;
+  isLoading?: boolean;
 };
 
 export function CheckoutReceiptModal({
@@ -29,6 +30,7 @@ export function CheckoutReceiptModal({
   globalSupplements,
   onClose,
   onConfirm,
+  isLoading = false,
 }: CheckoutReceiptModalProps) {
   const confirmRef = useRef<HTMLButtonElement>(null);
   const [isProcessing, setIsProcessing] = useState(false);
@@ -242,9 +244,9 @@ export function CheckoutReceiptModal({
           <button
             ref={confirmRef}
             type="button"
-            disabled={items.length === 0 || isProcessing}
+            disabled={isLoading || items.length === 0 || isProcessing}
             onClick={async () => {
-              if (items.length === 0 || isProcessing) return;
+              if (isLoading || items.length === 0 || isProcessing) return;
               setIsProcessing(true);
               try {
                 await onConfirm();
@@ -255,8 +257,8 @@ export function CheckoutReceiptModal({
             className="flex w-full items-center justify-center gap-2.5 rounded-2xl bg-success py-4 text-base font-bold text-success-foreground shadow-lg transition-all active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed"
           >
             <CreditCard className="h-5 w-5" />
-            {isProcessing ? "Traitement..." : "Encaisser"}
-            {!isProcessing && <CheckCircle2 className="h-4 w-4 opacity-80" />}
+            {isLoading ? "Chargement..." : isProcessing ? "Traitement..." : "Encaisser"}
+            {!isLoading && !isProcessing && <CheckCircle2 className="h-4 w-4 opacity-80" />}
           </button>
         </div>
       </div>

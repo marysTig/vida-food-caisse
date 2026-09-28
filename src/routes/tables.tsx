@@ -244,6 +244,7 @@ function TablesPage() {
   const [isMerging, setIsMerging] = useState(false);
   const [selectedTables, setSelectedTables] = useState<string[]>([]);
   const [isCreatingTakeaway, setIsCreatingTakeaway] = useState(false);
+  const [isFetchingOrder, setIsFetchingOrder] = useState(false);
 
   // ── Fetch table_orders depuis Supabase quand la caisse ouvre un modal d'encaissement
   // Corrige le bug : la caisse ouvre CheckoutReceiptModal sans passer par TableOrderSidebar,
@@ -286,9 +287,10 @@ function TablesPage() {
       }
     };
 
-    void fetchOrderForCheckout();
+    setIsFetchingOrder(true);
+    void fetchOrderForCheckout().finally(() => setIsFetchingOrder(false));
     return () => { mounted = false; };
-  }, [checkoutTable, _patchOrder, _patchNote]);
+  }, [checkoutTable, _patchOrder, _patchNote, _patchSupplements]);
 
   const emporterRoom = rooms.find(r => r.name.toLowerCase() === "emporter");
   const regularTables = tableData.filter(t => !emporterRoom || t.roomId !== emporterRoom.id);
@@ -468,7 +470,6 @@ function TablesPage() {
       return;
     }
 
-    const checkoutTableId = checkoutTable.id;
     clearOrder(checkoutTable.id);
     await updateTable(checkoutTable.id, {
       status: "libre",
@@ -515,14 +516,13 @@ function TablesPage() {
 
     setCheckoutTable(null);
 
-    // --- IMPRESSION CAISSE (file d'attente — pas d'attente Bluetooth) ---
+    // --- IMPRESSION CAISSE (toujours déclenchée, logs + toasts visibles) ---
     await runCashierReceiptPrint({
       printers,
       items: itemsToPrint,
       total: totalToPrint,
       label: tableNumberStr,
       globalSupplements: supplementsToPrint,
-      tableId: checkoutTableId,
     });
     // -------------------------
   };
@@ -752,6 +752,7 @@ function TablesPage() {
           setMultiCheckoutTables([]);
         }}
         onConfirm={handleQuickCheckout}
+        isLoading={isFetchingOrder}
       />
     </div>
   );
