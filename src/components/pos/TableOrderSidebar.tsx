@@ -175,12 +175,13 @@ type OrderListDesktopProps = {
   onNoteChange: (note: string) => void;
   onValidate: () => void;
   onCheckout: () => void;
+  onReprintKitchen?: () => void;
   onAddSupplement?: (item: CartItem) => void;
 };
 
 function OrderListDesktop({
   tableNumber, mergedNumbers, items, orderNote, itemCount, total,
-  isOccupied, isServeur, decrease, increase, remove, onNoteChange, onValidate, onCheckout, onAddSupplement
+  isOccupied, isServeur, decrease, increase, remove, onNoteChange, onValidate, onCheckout, onReprintKitchen, onAddSupplement
 }: OrderListDesktopProps) {
 
   return (
@@ -303,21 +304,33 @@ function OrderListDesktop({
           <span className="text-lg font-extrabold text-foreground">{formatDA(total)}</span>
         </div>
         {isOccupied ? (
-          <div className="flex gap-2">
-            <button
-              onClick={onValidate}
-              disabled={items.length === 0}
-              className="flex-1 rounded-xl bg-secondary py-3.5 text-sm font-bold text-secondary-foreground shadow-sm transition-all hover:-translate-y-0.5 active:translate-y-0 disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              Mettre à jour
-            </button>
-            {!isServeur && (
+          <div className="flex flex-col gap-2">
+            <div className="flex gap-2">
               <button
-                onClick={onCheckout}
-                className="flex-1 flex items-center justify-center gap-2 rounded-xl bg-success py-3.5 text-sm font-bold text-success-foreground shadow-lg transition-all hover:-translate-y-0.5 hover:shadow-xl active:translate-y-0"
+                onClick={onValidate}
+                disabled={items.length === 0}
+                className="flex-1 rounded-xl bg-secondary py-3.5 text-sm font-bold text-secondary-foreground shadow-sm transition-all hover:-translate-y-0.5 active:translate-y-0 disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                <CreditCard className="h-4 w-4" />
-                Encaisser
+                Mettre à jour
+              </button>
+              {!isServeur && (
+                <button
+                  onClick={onCheckout}
+                  className="flex-1 flex items-center justify-center gap-2 rounded-xl bg-success py-3.5 text-sm font-bold text-success-foreground shadow-lg transition-all hover:-translate-y-0.5 hover:shadow-xl active:translate-y-0"
+                >
+                  <CreditCard className="h-4 w-4" />
+                  Encaisser
+                </button>
+              )}
+            </div>
+            {onReprintKitchen && (
+              <button
+                type="button"
+                onClick={onReprintKitchen}
+                disabled={items.length === 0}
+                className="w-full rounded-xl border border-border bg-background py-2.5 text-xs font-semibold text-foreground hover:bg-muted disabled:opacity-50"
+              >
+                Réimprimer cuisine
               </button>
             )}
           </div>
@@ -718,7 +731,7 @@ export function TableOrderSidebar({ tableId, tableNumber, mergedIds, onClose }: 
       }
     }
 
-    // --- IMPRESSION CAISSE (séquentielle — même radio BT) ---
+    // --- IMPRESSION CAISSE (isolée — préempte la cuisine, ne partage pas le mutex) ---
     try {
       const cashierPrinters = printers.filter(p => p.enabled && p.type === "caisse");
       if (cashierPrinters.length === 0) {
@@ -727,7 +740,7 @@ export function TableOrderSidebar({ tableId, tableNumber, mergedIds, onClose }: 
       }
       for (const printer of cashierPrinters) {
         try {
-          await printerService.printReceipt(printer, itemsToPrint, totalToPrint, receiptLabel, activeSupplements);
+          await printerService.printReceiptIsolated(printer, itemsToPrint, totalToPrint, receiptLabel, activeSupplements);
         } catch (err: any) {
           console.error("Erreur d'impression caisse:", err);
           toast.error("Erreur d'impression caisse", { description: err.message });
@@ -738,6 +751,35 @@ export function TableOrderSidebar({ tableId, tableNumber, mergedIds, onClose }: 
     }
 
     onClose();
+  };
+
+  const handleReprintKitchen = async () => {
+    try {
+      const result = await enqueueKitchenPrint({
+        tableId,
+        orderLabel: kitchenOrderLabel,
+        items,
+        orderNote,
+        globalSupplements: activeSupplements,
+        printers,
+      });
+      if (result.status === "blocked_unmapped") {
+        toast.error("Catégories non associées à une imprimante cuisine", {
+          description: result.unmappedNames.join(", "),
+          duration: 8000,
+        });
+      } else if (result.status === "error") {
+        toast.error("Réimpression cuisine impossible", { description: result.message });
+      } else if (result.status === "enqueued") {
+        toast.success("Réimpression cuisine envoyée");
+      } else if (result.status === "noop" && result.reason === "empty_delta") {
+        toast.info("Rien de nouveau à imprimer en cuisine");
+      } else {
+        toast.info("Job cuisine déjà en file");
+      }
+    } catch (err: any) {
+      toast.error("Erreur réimpression cuisine", { description: err?.message });
+    }
   };
 
   const itemCount = items.reduce((s, i) => s + i.quantity, 0);
@@ -796,6 +838,7 @@ export function TableOrderSidebar({ tableId, tableNumber, mergedIds, onClose }: 
             onNoteChange={handleNoteChange}
             onValidate={handleValidateOrder}
             onCheckout={handleOpenCheckout}
+            onReprintKitchen={handleReprintKitchen}
             onAddSupplement={(item) => {
               setActiveSupplementItem(item);
               setSupplementModalOpen(true);
@@ -925,23 +968,33 @@ export function TableOrderSidebar({ tableId, tableNumber, mergedIds, onClose }: 
                 {/* Bouton valider / encaisser — toujours visible en bas */}
                 <div className="shrink-0 border-t border-border p-3 pb-safe-bottom bg-card">
                   {isOccupied ? (
-                    <div className="flex gap-2">
-                      <button
-                        onClick={handleValidateOrder}
-                        disabled={items.length === 0}
-                        className="flex-1 rounded-xl bg-secondary py-3.5 text-sm font-bold text-secondary-foreground shadow-sm transition-all active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed"
-                      >
-                        Mettre à jour
-                      </button>
-                      {!isServeur && (
+                    <div className="flex flex-col gap-2">
+                      <div className="flex gap-2">
                         <button
-                          onClick={() => setCheckoutOpen(true)}
-                          className="flex-1 flex items-center justify-center gap-2 rounded-xl bg-success py-3.5 text-sm font-bold text-success-foreground shadow-lg transition-all active:scale-[0.98]"
+                          onClick={handleValidateOrder}
+                          disabled={items.length === 0}
+                          className="flex-1 rounded-xl bg-secondary py-3.5 text-sm font-bold text-secondary-foreground shadow-sm transition-all active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed"
                         >
-                          <CreditCard className="h-4 w-4" />
-                          Encaisser
+                          Mettre à jour
                         </button>
-                      )}
+                        {!isServeur && (
+                          <button
+                            onClick={() => setCheckoutOpen(true)}
+                            className="flex-1 flex items-center justify-center gap-2 rounded-xl bg-success py-3.5 text-sm font-bold text-success-foreground shadow-lg transition-all active:scale-[0.98]"
+                          >
+                            <CreditCard className="h-4 w-4" />
+                            Encaisser
+                          </button>
+                        )}
+                      </div>
+                      <button
+                        type="button"
+                        onClick={handleReprintKitchen}
+                        disabled={items.length === 0}
+                        className="w-full rounded-xl border border-border bg-background py-2.5 text-xs font-semibold text-foreground hover:bg-muted disabled:opacity-50"
+                      >
+                        Réimprimer cuisine
+                      </button>
                     </div>
                   ) : (
                     <button

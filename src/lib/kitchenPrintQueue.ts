@@ -240,6 +240,73 @@ export async function enqueueKitchenPrint(
   return { status: "enqueued", jobId: (data?.id as string) ?? "" };
 }
 
+/**
+ * Consolidated fallback job when a station MAC is down / circuit-open.
+ * Uses a distinct idempotency key so it does not collide with the original delta key.
+ */
+export async function enqueueFallbackKitchenJob(params: {
+  tableId: string;
+  orderLabel: string | number;
+  orderNote?: string;
+  globalSupplements?: GlobalSupplement[];
+  fallbackPrinter: Printer;
+  lines: CartItem[];
+  fingerprints: Record<string, string>;
+  sourceJobId: string;
+}): Promise<EnqueueKitchenResult> {
+  if (params.lines.length === 0) {
+    return { status: "noop", reason: "empty_delta" };
+  }
+
+  const stations: KitchenStationBundle[] = [
+    {
+      printerId: params.fallbackPrinter.id,
+      printerName: params.fallbackPrinter.name,
+      lines: params.lines,
+    },
+  ];
+
+  const idempotencyKey = await sha256Hex(
+    `fallback|${params.sourceJobId}|${params.fallbackPrinter.id}|${params.lines
+      .map((l) => l.id)
+      .sort()
+      .join(",")}`,
+  );
+
+  const payload: KitchenPrintJobPayload = {
+    tableId: params.tableId,
+    orderLabel: params.orderLabel,
+    stations,
+    deltaLineIds: params.lines.map((l) => l.id),
+    fingerprints: params.fingerprints,
+  };
+  if (params.orderNote) payload.orderNote = params.orderNote;
+  if (params.globalSupplements?.length) {
+    payload.globalSupplements = params.globalSupplements;
+  }
+
+  const { data, error } = await supabase
+    .from("kitchen_print_jobs")
+    .insert({
+      table_id: params.tableId,
+      idempotency_key: idempotencyKey,
+      status: "pending",
+      payload,
+      error: `Fallback depuis job ${params.sourceJobId}`,
+      updated_at: new Date().toISOString(),
+    })
+    .select("id")
+    .maybeSingle();
+
+  if (error) {
+    if (error.code === "23505") {
+      return { status: "noop", reason: "duplicate" };
+    }
+    return { status: "error", message: error.message };
+  }
+  return { status: "enqueued", jobId: (data?.id as string) ?? "" };
+}
+
 export async function claimKitchenJob(
   jobId: string,
   deviceId: string = getLocalPrintDeviceId(),

@@ -122,7 +122,7 @@ function EmporterPage() {
       occupiedSince: null as any,
     });
     
-    // --- IMPRESSION CAISSE (séquentielle) ---
+    // --- IMPRESSION CAISSE (isolée — préempte la cuisine) ---
     try {
       const cashierPrinters = printers.filter(p => p.enabled && p.type === "caisse");
       if (cashierPrinters.length === 0) {
@@ -131,7 +131,7 @@ function EmporterPage() {
       }
       for (const printer of cashierPrinters) {
         try {
-          await printerService.printReceipt(
+          await printerService.printReceiptIsolated(
             printer,
             itemsToPrint,
             cartSubtotal(itemsToPrint),

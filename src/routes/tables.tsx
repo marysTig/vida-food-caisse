@@ -514,12 +514,12 @@ function TablesPage() {
 
     setCheckoutTable(null);
 
-    // --- IMPRESSION CAISSE (séquentielle) ---
+    // --- IMPRESSION CAISSE (isolée — préempte la cuisine) ---
     try {
       const cashierPrinters = printers.filter(p => p.enabled && p.type === "caisse");
       for (const printer of cashierPrinters) {
         try {
-          await printerService.printReceipt(printer, itemsToPrint, totalToPrint, tableNumberStr, supplementsToPrint);
+          await printerService.printReceiptIsolated(printer, itemsToPrint, totalToPrint, tableNumberStr, supplementsToPrint);
         } catch (err: any) {
           console.error("Erreur d'impression caisse:", err);
           toast.error("Erreur d'impression caisse", { description: err.message });

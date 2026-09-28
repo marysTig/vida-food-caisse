@@ -5,7 +5,8 @@ import { usePrinterStore, type Printer, type PrinterType } from "@/lib/printerSt
 import { useMenuStore } from "@/lib/menuStore";
 import { printerService } from "@/lib/printerService";
 import { usePrintSettingsStore } from "@/lib/printSettingsStore";
-import { fetchRecentKitchenJobs, type KitchenPrintJob } from "@/lib/kitchenPrintQueue";
+import { fetchRecentKitchenJobs, requeueFailedKitchenJob, type KitchenPrintJob } from "@/lib/kitchenPrintQueue";
+import { closeCircuit } from "@/lib/kitchenCircuitBreaker";
 import { ComponentLoader } from "@/components/ui/PageLoader";
 
 export function PrinterManager() {
@@ -17,6 +18,8 @@ export function PrinterManager() {
     isPrimaryHub,
     loading: hubLoading,
     claimPrimaryHub,
+    fallbackKitchenPrinterId,
+    setFallbackPrinter,
   } = usePrintSettingsStore();
 
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -318,6 +321,41 @@ export function PrinterManager() {
             Définir cet appareil comme hub
           </button>
         </div>
+
+        <div className="mt-4 border-t border-border pt-3">
+          <label className="mb-1 block text-xs font-semibold text-muted-foreground">
+            Imprimante cuisine de secours (fallback)
+          </label>
+          <p className="text-[11px] text-muted-foreground mb-2">
+            Si plaque/four échoue (timeout / circuit ouvert), les tickets restants sont
+            basculés vers cette imprimante au lieu de bloquer le worker.
+          </p>
+          <select
+            value={fallbackKitchenPrinterId ?? ""}
+            onChange={async (e) => {
+              const val = e.target.value || null;
+              try {
+                await setFallbackPrinter(val);
+                toast.success(
+                  val ? "Imprimante de secours enregistrée" : "Fallback désactivé",
+                );
+              } catch (err: any) {
+                toast.error("Erreur fallback", { description: err.message });
+              }
+            }}
+            className="w-full max-w-md rounded-lg border border-border bg-background px-3 py-2 text-sm"
+          >
+            <option value="">— Aucune (réimpression manuelle uniquement) —</option>
+            {printers
+              .filter((p) => p.enabled && (p.type === "plaque" || p.type === "four" || p.type === "caisse"))
+              .map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.name} ({p.type})
+                </option>
+              ))}
+          </select>
+        </div>
+
         {recentJobs.length > 0 && (
           <div className="mt-4 border-t border-border pt-3">
             <p className="text-xs font-semibold text-muted-foreground mb-2">Derniers jobs cuisine</p>
@@ -332,6 +370,30 @@ export function PrinterManager() {
                   <span className="text-muted-foreground">
                     {new Date(j.created_at).toLocaleString("fr-FR")}
                   </span>
+                  {j.status === "failed" && (
+                    <button
+                      type="button"
+                      className="rounded border border-border px-2 py-0.5 text-[10px] font-semibold hover:bg-muted"
+                      onClick={async () => {
+                        try {
+                          // Clear circuits for kitchen printers so retry can connect
+                          for (const p of printers) {
+                            if (p.type === "plaque" || p.type === "four") {
+                              closeCircuit(p.mac_address);
+                            }
+                          }
+                          await requeueFailedKitchenJob(j.id);
+                          toast.success("Job remis en file");
+                          const jobs = await fetchRecentKitchenJobs(8);
+                          setRecentJobs(jobs);
+                        } catch (err: any) {
+                          toast.error("Relance impossible", { description: err.message });
+                        }
+                      }}
+                    >
+                      Relancer
+                    </button>
+                  )}
                   {j.error && (
                     <span className="w-full text-destructive truncate" title={j.error}>
                       {j.error}

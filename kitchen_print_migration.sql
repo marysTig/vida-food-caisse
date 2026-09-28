@@ -21,6 +21,7 @@ WHERE COALESCE(cardinality(p.category_ids), 0) = 0
 CREATE TABLE IF NOT EXISTS public.print_settings (
   id uuid PRIMARY KEY DEFAULT '00000000-0000-4000-8000-000000000001'::uuid,
   primary_device_id text NOT NULL DEFAULT '',
+  fallback_kitchen_printer_id uuid REFERENCES public.printers(id) ON DELETE SET NULL,
   updated_at timestamptz NOT NULL DEFAULT now()
 );
 
@@ -82,3 +83,7 @@ BEGIN
 EXCEPTION
   WHEN duplicate_object THEN NULL;
 END $$;
+
+-- Fallback consolidated kitchen printer (safe if already applied)
+ALTER TABLE public.print_settings
+  ADD COLUMN IF NOT EXISTS fallback_kitchen_printer_id uuid REFERENCES public.printers(id) ON DELETE SET NULL;
