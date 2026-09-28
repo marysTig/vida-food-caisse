@@ -52,10 +52,16 @@ async function fetchProductsFromDB(): Promise<Product[]> {
       ? (row["categories"][0] ?? null)
       : (row["categories"] ?? null);
 
+    const categoryId =
+      (row["category_id"] as string | null) ??
+      (cat?.["id"] as string | null) ??
+      undefined;
+
     return {
       id: row["id"] as string,
       name: row["name"] as string,
       category: (cat?.["name"] as string) ?? "",
+      categoryId: categoryId || undefined,
       price: row["price"] as number,
       image: (row["image_url"] as string | null) ?? "",
       available: (row["available"] as boolean) ?? true,

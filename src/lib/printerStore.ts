@@ -10,7 +10,10 @@ export type Printer = {
   type: PrinterType;
   mac_address: string | null;
   enabled: boolean;
+  /** @deprecated Legacy name-based routing — prefer category_ids */
   categories: string[];
+  /** UUID category ids used for kitchen routing */
+  category_ids: string[];
 };
 
 type PrinterGlobalState = {
@@ -27,10 +30,48 @@ const usePrinterGlobalState = create<PrinterGlobalState>((set) => ({
   setLoading: (loading) => set({ loading }),
 }));
 
+function parseUuidArray(raw: unknown): string[] {
+  if (Array.isArray(raw)) {
+    return raw.map(String).filter(Boolean);
+  }
+  if (typeof raw === "string") {
+    try {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) return parsed.map(String).filter(Boolean);
+    } catch {
+      return raw
+        .replace(/^{/, "")
+        .replace(/}$/, "")
+        .split(",")
+        .map((s) => s.trim().replace(/^"/, "").replace(/"$/, ""))
+        .filter(Boolean);
+    }
+  }
+  return [];
+}
+
+function parseNameCategories(raw: unknown): string[] {
+  if (Array.isArray(raw)) return raw.map(String).filter(Boolean);
+  if (typeof raw === "string") {
+    try {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) return parsed.map(String).filter(Boolean);
+    } catch {
+      return raw
+        .replace(/^{/, "")
+        .replace(/}$/, "")
+        .split(",")
+        .map((s) => s.trim().replace(/^"/, "").replace(/"$/, ""))
+        .filter(Boolean);
+    }
+  }
+  return [];
+}
+
 async function fetchPrintersFromDB(): Promise<Printer[]> {
   const { data, error } = await supabase
     .from("printers")
-    .select("id, name, type, mac_address, enabled, categories, created_at")
+    .select("id, name, type, mac_address, enabled, categories, category_ids, created_at")
     .order("created_at", { ascending: true });
 
   if (error) {
@@ -39,32 +80,15 @@ async function fetchPrintersFromDB(): Promise<Printer[]> {
   }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  return (data ?? []).map((row: any) => {
-    let parsedCategories: string[] = [];
-    if (Array.isArray(row["categories"])) {
-      parsedCategories = row["categories"];
-    } else if (typeof row["categories"] === "string") {
-      try {
-        parsedCategories = JSON.parse(row["categories"]);
-      } catch (e) {
-        parsedCategories = row["categories"]
-          .replace(/^{/, "")
-          .replace(/}$/, "")
-          .split(",")
-          .map((s: string) => s.trim().replace(/^"/, "").replace(/"$/, ""))
-          .filter(Boolean);
-      }
-    }
-
-    return {
-      id: row["id"] as string,
-      name: row["name"] as string,
-      type: row["type"] as PrinterType,
-      mac_address: (row["mac_address"] as string | null) ?? null,
-      enabled: (row["enabled"] as boolean) ?? true,
-      categories: parsedCategories,
-    };
-  });
+  return (data ?? []).map((row: any) => ({
+    id: row["id"] as string,
+    name: row["name"] as string,
+    type: row["type"] as PrinterType,
+    mac_address: (row["mac_address"] as string | null) ?? null,
+    enabled: (row["enabled"] as boolean) ?? true,
+    categories: parseNameCategories(row["categories"]),
+    category_ids: parseUuidArray(row["category_ids"]),
+  }));
 }
 
 let _printerInitialized = false;
@@ -114,7 +138,8 @@ export function usePrinterStore() {
       type: printer.type,
       mac_address: printer.mac_address || null,
       enabled: printer.enabled,
-      categories: printer.categories,
+      categories: printer.categories ?? [],
+      category_ids: printer.category_ids ?? [],
     });
     if (error) throw new Error(error.message);
     await reload();
@@ -129,6 +154,7 @@ export function usePrinterStore() {
         ...(printer.mac_address !== undefined && { mac_address: printer.mac_address }),
         ...(printer.enabled !== undefined && { enabled: printer.enabled }),
         ...(printer.categories !== undefined && { categories: printer.categories }),
+        ...(printer.category_ids !== undefined && { category_ids: printer.category_ids }),
       })
       .eq("id", id);
     if (error) throw new Error(error.message);
@@ -149,4 +175,13 @@ export function usePrinterStore() {
     updatePrinter,
     deletePrinter,
   };
+}
+
+/** Snapshot of printers without React (for queue worker / enqueue). */
+export async function fetchPrintersOnce(): Promise<Printer[]> {
+  return fetchPrintersFromDB();
+}
+
+export function getPrintersFromStore(): Printer[] {
+  return usePrinterGlobalState.getState().printers;
 }

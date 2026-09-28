@@ -356,10 +356,25 @@ export const printerService = {
       throw new Error("L'imprimante n'est pas connectée. Veuillez la reconnecter (Web Bluetooth).");
     }
 
-    const categories = printer.categories || [];
-    const filteredItems = items.filter(item => categories.includes(item.product.category));
+    if (!items || items.length === 0) {
+      throw new Error(`Aucune ligne à imprimer pour ${printer.name}.`);
+    }
 
-    if (filteredItems.length === 0) return;
+    // Prefer category_ids (UUID). Fallback to legacy name matching for unmigrated rows.
+    const categoryIds = new Set(printer.category_ids ?? []);
+    const legacyNames = new Set(printer.categories ?? []);
+    const filteredItems = items.filter((item) => {
+      const catId = item.product.categoryId;
+      if (catId && categoryIds.size > 0) return categoryIds.has(catId);
+      if (legacyNames.size > 0) return legacyNames.has(item.product.category);
+      return false;
+    });
+
+    if (filteredItems.length === 0) {
+      throw new Error(
+        `Aucune ligne ne correspond aux catégories de ${printer.name}. Vérifiez le mapping catégories.`,
+      );
+    }
 
     const now = new Date();
     const dateStr = now.toLocaleDateString("fr-FR", { day: "2-digit", month: "2-digit", year: "numeric" });
@@ -375,7 +390,7 @@ export const printerService = {
     // Afficher Table N ou A Emporter #N
     const orderNumStr = String(orderNumber);
     let orderLabel: string;
-    if (orderNumStr.toLowerCase().startsWith("emport")) {
+    if (orderNumStr.toLowerCase().startsWith("emport") || orderNumStr.toLowerCase().includes("emporter")) {
       // Déjà formaté comme "EMPORTER #N" — afficher tel quel
       orderLabel = orderNumStr.replace(/^emporter\s*/i, "A EMPORTER ");
     } else {

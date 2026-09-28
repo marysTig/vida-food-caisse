@@ -19,7 +19,6 @@ import { cartSubtotal, type CartItem } from "@/lib/cart";
 import { toast } from "sonner";
 import { UserLogin } from "@/components/auth/UserLogin";
 import { ComponentLoader } from "@/components/ui/PageLoader";
-import { KitchenPrintHub } from "@/components/pos/KitchenPrintHub";
 import { recordZReport } from "@/lib/zReport";
 import { type GlobalSupplement } from "@/lib/globalSupplementsStore";
 
@@ -515,14 +514,16 @@ function TablesPage() {
 
     setCheckoutTable(null);
 
-    // --- IMPRESSION CAISSE ---
+    // --- IMPRESSION CAISSE (séquentielle) ---
     try {
       const cashierPrinters = printers.filter(p => p.enabled && p.type === "caisse");
       for (const printer of cashierPrinters) {
-        printerService.printReceipt(printer, itemsToPrint, totalToPrint, tableNumberStr, supplementsToPrint).catch(err => {
+        try {
+          await printerService.printReceipt(printer, itemsToPrint, totalToPrint, tableNumberStr, supplementsToPrint);
+        } catch (err: any) {
           console.error("Erreur d'impression caisse:", err);
           toast.error("Erreur d'impression caisse", { description: err.message });
-        });
+        }
       }
     } catch (err) {
       console.error("Impossible de lancer l'impression caisse", err);

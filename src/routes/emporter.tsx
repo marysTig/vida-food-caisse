@@ -15,7 +15,6 @@ import { usePrinterStore } from "@/lib/printerStore";
 import { printerService } from "@/lib/printerService";
 import { cartSubtotal, type CartItem } from "@/lib/cart";
 import { toast } from "sonner";
-import { KitchenPrintHub } from "@/components/pos/KitchenPrintHub";
 import { useSessionStore } from "@/lib/authStore";
 import { recordZReport } from "@/lib/zReport";
 import { type GlobalSupplement } from "@/lib/globalSupplementsStore";
@@ -123,7 +122,7 @@ function EmporterPage() {
       occupiedSince: null as any,
     });
     
-    // --- IMPRESSION CAISSE ---
+    // --- IMPRESSION CAISSE (séquentielle) ---
     try {
       const cashierPrinters = printers.filter(p => p.enabled && p.type === "caisse");
       if (cashierPrinters.length === 0) {
@@ -131,10 +130,18 @@ function EmporterPage() {
         toast.warning("Aucune imprimante de caisse configurée.");
       }
       for (const printer of cashierPrinters) {
-        printerService.printReceipt(printer, itemsToPrint, cartSubtotal(itemsToPrint), `À EMPORTER — Commande #${checkoutTable.number}`, supplementsToPrint).catch(err => {
+        try {
+          await printerService.printReceipt(
+            printer,
+            itemsToPrint,
+            cartSubtotal(itemsToPrint),
+            `À EMPORTER — Commande #${checkoutTable.number}`,
+            supplementsToPrint,
+          );
+        } catch (err: any) {
           console.error("Erreur d'impression caisse:", err);
           toast.error("Erreur d'impression caisse", { description: err.message });
-        });
+        }
       }
     } catch (err) {
       console.error("Impossible de lancer l'impression caisse", err);

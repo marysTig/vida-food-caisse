@@ -16,19 +16,12 @@ import { useSessionStore } from "@/lib/authStore";
 import { supabase } from "@/lib/supabase";
 import { usePrinterStore } from "@/lib/printerStore";
 import { printerService } from "@/lib/printerService";
-import { sendKitchenBroadcast } from "@/lib/kitchenPrintSender";
+import { enqueueKitchenPrint } from "@/lib/kitchenPrintQueue";
 import { toast } from "sonner";
 import { ComponentLoader } from "@/components/ui/PageLoader";
 import { recordZReport } from "@/lib/zReport";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { useGlobalSupplementsStore, reloadGlobalSupplements, type GlobalSupplement } from "@/lib/globalSupplementsStore";
-
-// ── Guard anti-double-impression cuisine ──────────────────────────────────────
-// Set module-level (singleton pour toute la durée de la session JS).
-// Clé : tableId. Une table y est ajoutée au moment où la cuisine imprime,
-// et retirée quand le sidebar se ferme → une nouvelle session peut ré-imprimer.
-// Ceci protège contre : double-clic, re-renders, mises à jour Realtime Zustand.
-const _kitchenPrintedSet = new Set<string>();
 
 type TableOrderSidebarProps = {
   tableId: string;
@@ -617,21 +610,16 @@ export function TableOrderSidebar({ tableId, tableNumber, mergedIds, onClose }: 
   const handleValidateOrder = async () => {
     console.log("[SERVER ORDER] Creating order");
     console.log("[SERVER ORDER] Table ID:", tableId);
-    console.log("[SERVER ORDER] Order ID: (Items have individual IDs)");
     console.log("[SERVER ORDER] Items:", items);
-    console.log("[SERVER ORDER] Commander clicked");
-    
+
     // Flush immédiat vers Supabase — garantit que la Caisse verra les items
-    // dans table_orders AVANT de recevoir le statut "occupee" et d'ouvrir le modal.
-    console.log("[SERVER ORDER] Saving table_orders");
+    // dans table_orders AVANT de recevoir le statut "occupee".
     await flushOrder(tableId);
-    console.log("[SERVER ORDER] table_orders saved");
 
     const now = new Date().toISOString();
     await updateTable(tableId, {
       status: "occupee",
       orderTotal: total,
-      // Only set occupiedSince if it wasn't already occupied
       ...(isOccupied ? {} : { occupiedSince: now }),
     });
 
@@ -646,74 +634,39 @@ export function TableOrderSidebar({ tableId, tableNumber, mergedIds, onClose }: 
         }
       }
     }
-    console.log("[SERVER ORDER] Order created");
 
-    // --- IMPRESSION CUISINE (Plaque / Four) ---
-    // Guard : ne déclenche qu'une seule fois par ouverture du sidebar pour cette table.
-    // Protège contre double-clic, re-renders et événements Realtime Zustand.
+    // --- FILE D'ATTENTE CUISINE (delta, idempotent, hub primaire) ---
     try {
-      console.log("[SERVER PRINT] Starting kitchen print logic");
-      if (!_kitchenPrintedSet.has(tableId)) {
-        _kitchenPrintedSet.add(tableId);
-        
-        // Utilisation de Math.random() au lieu de crypto.randomUUID() qui n'est pas dispo en HTTP local
-        const printId = Date.now().toString(36) + Math.random().toString(36).substring(2);
-        
-        if (isServeur) {
-          // OPTION B : HUB D'IMPRESSION
-          // Le serveur n'essaie pas d'imprimer en Bluetooth depuis son téléphone. 
-          // Il broadcast l'ordre à la Caisse qui s'en chargera via KitchenPrintHub.
-          console.log("[SERVER ORDER] Broadcasting print order to Caisse hub");
-          sendKitchenBroadcast({
-            printId,
-            tableId,
-            tableNumber: isEmporter ? `EMPORTER #${tableNumber}` : tableNumber,
-            items,
-            orderNote,
-            // BUG FIX: pass activeSupplements, not hardcoded []
-            globalSupplements: activeSupplements,
-          }).then(() => {
-            console.log("[SERVER ORDER] Broadcast sent successfully");
-            // Remove guard ONLY after broadcast resolves, so a retry cannot slip through
-            _kitchenPrintedSet.delete(tableId);
-          }).catch(err => {
-            console.error("[SERVER ORDER] Failed to broadcast:", err);
-            toast.error("Erreur de connexion pour l'impression cuisine.");
-            _kitchenPrintedSet.delete(tableId);
-          });
-        } else {
-          // La Caisse imprime directement sans passer par le Hub
-          const kitchenPrinters = printers.filter(p => p.enabled && (p.type === "plaque" || p.type === "four"));
-          console.log(`[CAISSE PRINT] Active printers:`, kitchenPrinters);
-          
-          if (kitchenPrinters.length === 0) {
-            toast.warning("Aucune imprimante cuisine configurée ou activée.");
-          }
-          
-          (async () => {
-            for (const printer of kitchenPrinters) {
-              console.log(`[CAISSE PRINT] Printing to ${printer.name}`);
-              try {
-                // BUG FIX: pass activeSupplements, not hardcoded []
-                await printerService.printKitchen(printer, items, kitchenOrderLabel, orderNote, activeSupplements);
-                console.log(`[CAISSE PRINT] Print success for ${printer.name}`);
-              } catch (err: any) {
-                console.error(`[Cuisine] Erreur impression ${printer.name}:`, err);
-                toast.error(`Erreur d'impression cuisine (${printer.name})`, { description: err.message });
-              }
-            }
-            _kitchenPrintedSet.delete(tableId);
-          })();
-          console.log(`[Cuisine] Impression directe lancée pour table ${tableId} (${kitchenPrinters.length} imprimante(s)).`);
-        }
-      } else {
-        console.log(`[Cuisine] Déjà imprimé/broadcasté pour table ${tableId} — ignoré.`);
+      const result = await enqueueKitchenPrint({
+        tableId,
+        orderLabel: kitchenOrderLabel,
+        items,
+        orderNote,
+        globalSupplements: activeSupplements,
+        printers,
+      });
+
+      if (result.status === "blocked_unmapped") {
+        toast.error("Catégories non associées à une imprimante cuisine", {
+          description: result.unmappedNames.join(", "),
+          duration: 8000,
+        });
+      } else if (result.status === "error") {
+        toast.error("Impossible d'envoyer en cuisine", {
+          description: result.message,
+        });
+      } else if (result.status === "enqueued") {
+        toast.success(isOccupied ? "Mise à jour envoyée en cuisine" : "Commande envoyée en cuisine");
+      } else if (result.status === "noop" && result.reason === "empty_delta") {
+        // Rien de nouveau — silence volontaire (évite le bruit sur double-valider)
+        console.log("[KITCHEN] No delta to print for", tableId);
+      } else if (result.status === "noop" && result.reason === "duplicate") {
+        console.log("[KITCHEN] Duplicate idempotency key — already queued");
       }
     } catch (err) {
       console.error("Impossible de lancer l'impression cuisine", err);
-      _kitchenPrintedSet.delete(tableId);
+      toast.error("Erreur lors de l'envoi cuisine");
     }
-    // ------------------------------------------
 
     onClose();
   };
@@ -765,7 +718,7 @@ export function TableOrderSidebar({ tableId, tableNumber, mergedIds, onClose }: 
       }
     }
 
-    // --- IMPRESSION CAISSE ---
+    // --- IMPRESSION CAISSE (séquentielle — même radio BT) ---
     try {
       const cashierPrinters = printers.filter(p => p.enabled && p.type === "caisse");
       if (cashierPrinters.length === 0) {
@@ -773,18 +726,17 @@ export function TableOrderSidebar({ tableId, tableNumber, mergedIds, onClose }: 
         toast.warning("Aucune imprimante de caisse configurée.");
       }
       for (const printer of cashierPrinters) {
-        printerService.printReceipt(printer, itemsToPrint, totalToPrint, receiptLabel, activeSupplements).catch(err => {
+        try {
+          await printerService.printReceipt(printer, itemsToPrint, totalToPrint, receiptLabel, activeSupplements);
+        } catch (err: any) {
           console.error("Erreur d'impression caisse:", err);
           toast.error("Erreur d'impression caisse", { description: err.message });
-        });
+        }
       }
     } catch (err) {
       console.error("Impossible de lancer l'impression caisse", err);
     }
-    // -------------------------
 
-    // Nettoyer le guard cuisine (la table est libérée, session terminée)
-    _kitchenPrintedSet.delete(tableId);
     onClose();
   };
 

@@ -7,6 +7,7 @@ CREATE TABLE IF NOT EXISTS public.printers (
     mac_address text,
     enabled boolean DEFAULT true,
     categories text[] DEFAULT '{}',
+    category_ids uuid[] NOT NULL DEFAULT '{}',
     created_at timestamp with time zone DEFAULT now() NOT NULL
 );
 

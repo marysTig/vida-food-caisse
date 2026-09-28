@@ -29,6 +29,8 @@ export type Product = {
   id: string;
   name: string;
   category: Exclude<Category, "Tous">;
+  /** UUID from products.category_id — used for kitchen printer routing */
+  categoryId?: string | undefined;
   price: number;               // prix de base (affiché si aucune option)
   image: string;
   available: boolean;

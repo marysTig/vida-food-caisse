@@ -16,8 +16,12 @@ import { App as CapacitorApp } from "@capacitor/app";
 import appCss from "../styles.css?url";
 import { reportLovableError } from "../lib/lovable-error-reporting";
 import { PageLoader } from "../components/ui/PageLoader";
-import { KitchenPrintHub } from "../components/pos/KitchenPrintHub";
+import {
+  KitchenPrintWorker,
+  getKitchenPrintRealtimeManager,
+} from "../components/pos/KitchenPrintWorker";
 import { useSessionStore } from "../lib/authStore";
+import { usePrintSettingsStore } from "../lib/printSettingsStore";
 
 function NotFoundComponent() {
   return (
@@ -132,6 +136,8 @@ function RootComponent() {
   const { queryClient } = Route.useRouteContext();
   const currentUser = useSessionStore(s => s.currentUser);
   const isLoggedIn = !!currentUser;
+  // Ensures print_settings loads for hub ownership (worker mounts when primary)
+  usePrintSettingsStore();
 
   // ── Sync stores : ne s'initialisent QU'APRÈS le login ───────────────────────
   // Avant le login, currentUser === null → isLoggedIn === false → aucun appel
@@ -156,6 +162,7 @@ function RootComponent() {
             console.log("[Realtime:Root] FOREGROUND — vérification des channels");
             void getTableRealtimeManager().handleForeground();
             void getTableOrdersRealtimeManager().handleForeground();
+            void getKitchenPrintRealtimeManager()?.handleForeground();
           }
         });
       } catch {
@@ -178,8 +185,8 @@ function RootComponent() {
     <QueryClientProvider client={queryClient}>
       {/* Required: nested routes render here. Removing <Outlet /> breaks all child routes. */}
       <Outlet />
-      {/* KitchenPrintHub : monté uniquement si l'utilisateur est connecté ET n'est pas serveur */}
-      {currentUser && currentUser.role !== 'serveur' && <KitchenPrintHub />}
+      {/* Kitchen print worker: only the primary hub device executes Bluetooth jobs */}
+      {currentUser && <KitchenPrintWorker />}
     </QueryClientProvider>
   );
 }
