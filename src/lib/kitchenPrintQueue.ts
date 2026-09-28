@@ -349,8 +349,15 @@ export async function enqueueReceipt(
     return { status: "noop", reason: "no_printer" };
   }
 
+  // table_id column is uuid — never insert fake strings like "receipt-2"
+  const uuidRe =
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+  const tableIdForDb =
+    params.tableId && uuidRe.test(params.tableId) ? params.tableId : null;
+  const idempotencyScope = params.tableId || String(params.orderLabel);
+
   const checkoutTs = params.checkoutTs ?? Date.now();
-  const idempotencyKey = `receipt:${params.tableId}:${checkoutTs}`;
+  const idempotencyKey = `receipt:${idempotencyScope}:${checkoutTs}`;
   const escpos = buildReceiptEscPos({
     items: params.items,
     total: params.total,
@@ -362,7 +369,7 @@ export async function enqueueReceipt(
   const now = new Date().toISOString();
   const payload: PrintJobPayload = {
     escposBase64: uint8ToBase64(escpos),
-    tableId: params.tableId,
+    tableId: tableIdForDb ?? idempotencyScope,
     orderLabel: params.orderLabel,
   };
   if (params.globalSupplements?.length) {
@@ -372,7 +379,7 @@ export async function enqueueReceipt(
   const { data, error } = await supabase
     .from("print_jobs")
     .insert({
-      table_id: params.tableId,
+      table_id: tableIdForDb,
       job_type: "receipt",
       priority: PRIORITY_RECEIPT,
       printer_id: caisse.id,

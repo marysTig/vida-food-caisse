@@ -31,6 +31,7 @@ export async function runCashierReceiptPrint(params: {
     itemCount: items.length,
     total,
     label,
+    tableId: params.tableId ?? null,
   });
 
   const cashierPrinters = params.printers.filter(
@@ -56,18 +57,50 @@ export async function runCashierReceiptPrint(params: {
     return { attempted: 1, succeeded: 0, errors: [msg] };
   }
 
-  const tableId =
-    params.tableId ??
-    `receipt-${typeof label === "string" || typeof label === "number" ? label : "x"}`;
+  // Prefer real table UUID; otherwise a non-uuid scope (DB column stays null)
+  const tableId = params.tableId?.trim() || `anon:${Date.now()}`;
 
   const result = await enqueueReceipt({
-    tableId: String(tableId),
+    tableId,
     orderLabel: label,
     items,
     total,
     printers: params.printers,
     ...(globalSupplements?.length ? { globalSupplements } : {}),
   });
+
+  // #region agent log
+  fetch("http://127.0.0.1:7680/ingest/b490126b-dfa2-4a19-9733-3902cacf3768", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "X-Debug-Session-Id": "c5e869",
+    },
+    body: JSON.stringify({
+      sessionId: "c5e869",
+      hypothesisId: "E",
+      location: "cashierPrint.ts:enqueue",
+      message: "receipt_enqueued",
+      data: {
+        status: result.status,
+        jobId: result.status === "enqueued" ? result.jobId : null,
+        reason:
+          result.status === "noop"
+            ? result.reason
+            : result.status === "error"
+              ? result.message
+              : null,
+        printer: caisse.name,
+        mac,
+        label: String(label),
+        tableId,
+      },
+      timestamp: Date.now(),
+      runId: "caisse-post",
+    }),
+  }).catch(() => {});
+  console.log("[DBG c5e869] E · receipt_enqueued", result);
+  // #endregion
 
   if (result.status === "error") {
     errors.push(result.message);
@@ -92,33 +125,6 @@ export async function runCashierReceiptPrint(params: {
   });
 
   wakePrintQueueDaemon();
-  // #region agent log
-  fetch("http://127.0.0.1:7680/ingest/b490126b-dfa2-4a19-9733-3902cacf3768", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "X-Debug-Session-Id": "c5e869",
-    },
-    body: JSON.stringify({
-      sessionId: "c5e869",
-      hypothesisId: "E",
-      location: "cashierPrint.ts:enqueue",
-      message: "receipt_enqueued",
-      data: {
-        status: result.status,
-        jobId: result.status === "enqueued" ? result.jobId : null,
-        reason: result.status === "noop" ? result.reason : null,
-        printer: caisse.name,
-        mac,
-        label: String(label),
-        tableId: String(tableId),
-      },
-      timestamp: Date.now(),
-      runId: "caisse-post",
-    }),
-  }).catch(() => {});
-  console.log("[DBG c5e869] E · receipt_enqueued", result);
-  // #endregion
   toast.success("Ticket en file d'impression", {
     description: caisse.name,
     duration: 2500,
