@@ -22,15 +22,111 @@ const DOUBLE_HEIGHT_WIDTH = GS + "!" + "\x11";
 const NORMAL_SIZE = GS + "!" + "\x00";
 const CUT_PAPER = GS + "V" + "\x41" + "\x03"; // Full cut with feed
 
+/** Max time to wait for connect+write before aborting (user: 2.5–3s). */
+const BT_OP_TIMEOUT_MS = 3000;
+/** Max time a caller waits to acquire the BT mutex before failing fast. */
+const BT_MUTEX_WAIT_MS = 4000;
+/** After disconnect, give Android HCI stack time before next connect (different MAC). */
+const BT_POST_DISCONNECT_SETTLE_MS = 900;
+/** Brief pause after write before disconnect so printer buffer drains. */
+const BT_PRE_DISCONNECT_DRAIN_MS = 350;
+/** Extra gap the kitchen worker should wait between Plaque → Four. */
+export const BT_INTER_PRINTER_GAP_MS = 700;
+
 // Le service gère un registre d'appareils connectés en mémoire (pour Web Bluetooth)
 const webConnectedDevices = new Map<string, BluetoothRemoteGATTCharacteristic>();
 
-// Verrou global pour éviter de crasher le daemon Bluetooth Android
-let isBluetoothBusy = false;
+// ── Bluetooth mutex (single radio — never steal a held lock) ─────────────────
+let btLockOwner: string | null = null;
+let btLockGeneration = 0;
+
+function btLog(phase: string, printerName: string, detail?: string) {
+  const extra = detail ? ` | ${detail}` : "";
+  console.log(`[BT] ${phase} · ${printerName}${extra}`);
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function acquireBluetoothLock(owner: string): Promise<number> {
+  const started = Date.now();
+  while (btLockOwner !== null) {
+    if (Date.now() - started >= BT_MUTEX_WAIT_MS) {
+      btLog(
+        "MUTEX_TIMEOUT",
+        owner,
+        `held_by=${btLockOwner} waited=${Date.now() - started}ms`,
+      );
+      throw new Error(
+        `Bluetooth occupé (${btLockOwner}). Réessayez dans un instant.`,
+      );
+    }
+    await sleep(100);
+  }
+  btLockOwner = owner;
+  btLockGeneration += 1;
+  btLog("MUTEX_ACQUIRE", owner, `gen=${btLockGeneration}`);
+  return btLockGeneration;
+}
+
+function releaseBluetoothLock(owner: string, generation: number) {
+  if (btLockOwner === owner && btLockGeneration === generation) {
+    btLockOwner = null;
+    btLog("MUTEX_RELEASE", owner, `gen=${generation}`);
+  } else {
+    btLog(
+      "MUTEX_RELEASE_SKIP",
+      owner,
+      `expected=${owner}/${generation} actual=${btLockOwner}/${btLockGeneration}`,
+    );
+  }
+}
+
+/** Best-effort disconnect; always resolves (never throws). */
+function forceDisconnectNative(reason: string): Promise<void> {
+  return new Promise((resolve) => {
+    if (typeof window === "undefined" || !window.bluetoothSerial) {
+      resolve();
+      return;
+    }
+    btLog("SOCKET_CLOSE", "native", reason);
+    try {
+      window.bluetoothSerial.disconnect(
+        () => {
+          btLog("SOCKET_CLOSE_OK", "native", reason);
+          resolve();
+        },
+        (err: unknown) => {
+          btLog("SOCKET_CLOSE_ERR", "native", `${reason} · ${String(err)}`);
+          resolve();
+        },
+      );
+    } catch (e) {
+      btLog("SOCKET_CLOSE_THROW", "native", String(e));
+      resolve();
+    }
+  });
+}
+
+/**
+ * After any print (success or failure): close socket and settle HCI
+ * so the next MAC connect does not race the previous session.
+ */
+export async function settleBluetoothRadio(label = "settle"): Promise<void> {
+  await forceDisconnectNative(label);
+  await sleep(BT_POST_DISCONNECT_SETTLE_MS);
+  btLog("SOCKET_SETTLE_DONE", label, `${BT_POST_DISCONNECT_SETTLE_MS}ms`);
+}
 
 export const printerService = {
   isNativePlatform(): boolean {
     return typeof window !== "undefined" && !!window.bluetoothSerial;
+  },
+
+  /** True while a native BT job holds the radio. */
+  isBluetoothBusy(): boolean {
+    return btLockOwner !== null;
   },
 
   /**
@@ -54,20 +150,33 @@ export const printerService = {
       // Sur Capacitor, on connecte/imprime/déconnecte à la volée. 
       // Ici on fait juste un ping pour tester.
       if (!printer.mac_address) throw new Error("Adresse MAC manquante. Veuillez d'abord l'associer.");
-      return new Promise((resolve, reject) => {
-        window.bluetoothSerial.isEnabled(
-          () => {
-            window.bluetoothSerial.connect(printer.mac_address, 
-              () => {
-                window.bluetoothSerial.disconnect();
-                resolve();
-              }, 
-              (err: any) => reject(new Error("Impossible de se connecter: " + err))
-            );
-          },
-          () => reject(new Error("Le Bluetooth est désactivé sur cet appareil."))
-        );
-      });
+      const owner = `ping:${printer.name}`;
+      const gen = await acquireBluetoothLock(owner);
+      try {
+        await settleBluetoothRadio(`pre-ping:${printer.name}`);
+        await new Promise<void>((resolve, reject) => {
+          window.bluetoothSerial.isEnabled(
+            () => {
+              btLog("SOCKET_OPEN", printer.name, printer.mac_address || "");
+              window.bluetoothSerial.connect(
+                printer.mac_address,
+                () => {
+                  btLog("SOCKET_OPEN_OK", printer.name, "ping");
+                  void forceDisconnectNative(`ping-done:${printer.name}`).then(() =>
+                    resolve(),
+                  );
+                },
+                (err: any) => reject(new Error("Impossible de se connecter: " + err)),
+              );
+            },
+            () => reject(new Error("Le Bluetooth est désactivé sur cet appareil.")),
+          );
+        });
+        await sleep(BT_POST_DISCONNECT_SETTLE_MS);
+      } finally {
+        releaseBluetoothLock(owner, gen);
+      }
+      return;
     }
 
     if (!navigator.bluetooth) {
@@ -118,72 +227,133 @@ export const printerService = {
 
   async sendData(printer: Printer, data: Uint8Array): Promise<void> {
     if (this.isNativePlatform()) {
-      if (!printer.mac_address) throw new Error("Adresse MAC non configurée pour " + printer.name);
-      
-      // Attendre si le Bluetooth est déjà en cours d'utilisation
-      let waitTime = 0;
-      while (isBluetoothBusy && waitTime < 10000) {
-        await new Promise(r => setTimeout(r, 500));
-        waitTime += 500;
+      if (!printer.mac_address) {
+        throw new Error("Adresse MAC non configurée pour " + printer.name);
       }
-      
-      isBluetoothBusy = true;
-      
-      return new Promise((resolve, reject) => {
-        let isDone = false;
-        
-        // Timeout de sécurité au cas où le plugin Bluetooth plante silencieusement
-        const timeoutId = setTimeout(() => {
-          if (!isDone) {
-            isDone = true;
-            isBluetoothBusy = false;
-            try { window.bluetoothSerial.disconnect(); } catch(e) {}
-            reject(new Error(`Délai d'attente dépassé pour ${printer.name}. L'imprimante est-elle allumée ?`));
-          }
-        }, 8000);
-        
-        const cleanup = () => {
-          if (!isDone) {
-            isDone = true;
+
+      const owner = printer.name;
+      const gen = await acquireBluetoothLock(owner);
+
+      try {
+        // Always tear down any leftover session before opening a new MAC
+        await settleBluetoothRadio(`pre-connect:${printer.name}`);
+
+        await new Promise<void>((resolve, reject) => {
+          let settled = false;
+          const finish = (fn: () => void) => {
+            if (settled) return;
+            settled = true;
             clearTimeout(timeoutId);
-            isBluetoothBusy = false;
-          }
-        };
+            fn();
+          };
 
-        const doConnect = () => {
-          window.bluetoothSerial.connect(printer.mac_address, () => {
-            if (isDone) return;
-            
-            window.bluetoothSerial.write(data.buffer, () => {
-              if (isDone) return;
-              
-              // Petit délai pour laisser le buffer s'imprimer
-              setTimeout(() => {
-                if (isDone) return;
-                window.bluetoothSerial.disconnect(
-                  () => { cleanup(); resolve(); },
-                  (e: any) => { cleanup(); reject(new Error(e)); }
+          const timeoutId = setTimeout(() => {
+            finish(() => {
+              btLog("SOCKET_TIMEOUT", printer.name, `${BT_OP_TIMEOUT_MS}ms`);
+              void forceDisconnectNative(`timeout:${printer.name}`).then(() => {
+                reject(
+                  new Error(
+                    `Délai d'attente dépassé pour ${printer.name}. L'imprimante est-elle allumée ?`,
+                  ),
                 );
-              }, 1000);
-            }, (err: any) => {
-              window.bluetoothSerial.disconnect();
-              cleanup();
-              reject(new Error("Erreur écriture: " + err));
+              });
             });
-          }, (err: any) => {
-            cleanup();
-            reject(new Error("Connexion impossible (Vérifiez l'imprimante): " + err));
-          });
-        };
+          }, BT_OP_TIMEOUT_MS);
 
-        window.bluetoothSerial.isEnabled(
-          () => doConnect(),
-          () => {
-            cleanup();
-            reject(new Error("Le Bluetooth est désactivé sur la tablette !"));
-          }
-        );
-      });
+          const doConnect = () => {
+            btLog("SOCKET_OPEN", printer.name, printer.mac_address || "");
+            window.bluetoothSerial.connect(
+              printer.mac_address,
+              () => {
+                if (settled) {
+                  btLog("SOCKET_OPEN_LATE", printer.name, "ignored after timeout");
+                  void forceDisconnectNative(`late-open:${printer.name}`);
+                  return;
+                }
+                btLog("SOCKET_OPEN_OK", printer.name, `bytes=${data.byteLength}`);
+
+                window.bluetoothSerial.write(
+                  data.buffer,
+                  () => {
+                    if (settled) {
+                      btLog("SOCKET_WRITE_LATE", printer.name, "ignored");
+                      void forceDisconnectNative(`late-write:${printer.name}`);
+                      return;
+                    }
+                    btLog("SOCKET_WRITE_OK", printer.name, `bytes=${data.byteLength}`);
+
+                    void (async () => {
+                      await sleep(BT_PRE_DISCONNECT_DRAIN_MS);
+                      if (settled) return;
+                      btLog("SOCKET_CLOSE", printer.name, "after-write");
+                      window.bluetoothSerial.disconnect(
+                        () => {
+                          btLog("SOCKET_CLOSE_OK", printer.name, "after-write");
+                          finish(() => {
+                            void sleep(BT_POST_DISCONNECT_SETTLE_MS).then(() => {
+                              btLog(
+                                "SOCKET_SETTLE_DONE",
+                                printer.name,
+                                `${BT_POST_DISCONNECT_SETTLE_MS}ms`,
+                              );
+                              resolve();
+                            });
+                          });
+                        },
+                        (e: any) => {
+                          btLog("SOCKET_CLOSE_ERR", printer.name, String(e));
+                          finish(() => {
+                            void sleep(BT_POST_DISCONNECT_SETTLE_MS).then(() =>
+                              reject(new Error(String(e))),
+                            );
+                          });
+                        },
+                      );
+                    })();
+                  },
+                  (err: any) => {
+                    btLog("SOCKET_WRITE_ERR", printer.name, String(err));
+                    void forceDisconnectNative(`write-err:${printer.name}`).then(() => {
+                      finish(() =>
+                        reject(new Error("Erreur écriture: " + err)),
+                      );
+                    });
+                  },
+                );
+              },
+              (err: any) => {
+                btLog("SOCKET_OPEN_ERR", printer.name, String(err));
+                void forceDisconnectNative(`open-err:${printer.name}`).then(() => {
+                  finish(() =>
+                    reject(
+                      new Error(
+                        "Connexion impossible (Vérifiez l'imprimante): " + err,
+                      ),
+                    ),
+                  );
+                });
+              },
+            );
+          };
+
+          window.bluetoothSerial.isEnabled(
+            () => doConnect(),
+            () => {
+              finish(() =>
+                reject(new Error("Le Bluetooth est désactivé sur la tablette !")),
+              );
+            },
+          );
+        });
+      } catch (err) {
+        // Ensure radio is free even if connect never opened
+        await forceDisconnectNative(`catch:${printer.name}`);
+        await sleep(BT_POST_DISCONNECT_SETTLE_MS);
+        throw err;
+      } finally {
+        releaseBluetoothLock(owner, gen);
+      }
+      return;
     }
 
     // Web Bluetooth
