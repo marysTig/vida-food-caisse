@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Printer as PrinterIcon, Plus, Trash2, Edit2, Check, X, Bluetooth, BluetoothConnected, Tablet } from "lucide-react";
+import { Printer as PrinterIcon, Plus, Trash2, Edit2, Check, X, Bluetooth, BluetoothConnected, Tablet, RefreshCw } from "lucide-react";
 import { toast } from "sonner";
 import { usePrinterStore, type Printer, type PrinterType } from "@/lib/printerStore";
 import { useMenuStore } from "@/lib/menuStore";
@@ -7,7 +7,17 @@ import { printerService } from "@/lib/printerService";
 import { usePrintSettingsStore } from "@/lib/printSettingsStore";
 import { fetchRecentKitchenJobs, requeueFailedKitchenJob, type KitchenPrintJob } from "@/lib/kitchenPrintQueue";
 import { closeCircuit } from "@/lib/kitchenCircuitBreaker";
+import {
+  getPrintActivity,
+  subscribePrintActivity,
+  type PrintActivityEntry,
+} from "@/lib/printActivityLog";
 import { ComponentLoader } from "@/components/ui/PageLoader";
+
+type Reachability = {
+  status: "unknown" | "checking" | "ok" | "fail";
+  detail: string;
+};
 
 export function PrinterManager() {
   const { printers, loading, addPrinter, updatePrinter, deletePrinter } = usePrinterStore();
@@ -27,7 +37,13 @@ export function PrinterManager() {
   const [pairedDevices, setPairedDevices] = useState<{ name: string; address: string }[]>([]);
   const [scanning, setScanning] = useState(false);
   const [recentJobs, setRecentJobs] = useState<KitchenPrintJob[]>([]);
-  const [, setForceRender] = useState(0);
+  const [activity, setActivity] = useState<PrintActivityEntry[]>(() => getPrintActivity());
+  const [reachability, setReachability] = useState<Record<string, Reachability>>({});
+  const [probingAll, setProbingAll] = useState(false);
+
+  useEffect(() => {
+    return subscribePrintActivity(() => setActivity(getPrintActivity()));
+  }, []);
 
   useEffect(() => {
     let mounted = true;
@@ -44,6 +60,39 @@ export function PrinterManager() {
       clearInterval(t);
     };
   }, []);
+
+  const probePrinter = async (printer: Printer) => {
+    setReachability((prev) => ({
+      ...prev,
+      [printer.id]: { status: "checking", detail: "Test en cours…" },
+    }));
+    const result = await printerService.verifyPrinterReachable(printer);
+    setReachability((prev) => ({
+      ...prev,
+      [printer.id]: {
+        status: result.ok ? "ok" : "fail",
+        detail: result.detail,
+      },
+    }));
+    return result;
+  };
+
+  const probeAll = async () => {
+    setProbingAll(true);
+    try {
+      for (const p of printers) {
+        await probePrinter(p);
+      }
+    } finally {
+      setProbingAll(false);
+    }
+  };
+
+  useEffect(() => {
+    if (loading || hubLoading || printers.length === 0) return;
+    void probeAll();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loading, hubLoading, printers.map((p) => `${p.id}:${p.mac_address}`).join("|")]);
 
   if (loading || hubLoading) return <ComponentLoader />;
 
@@ -101,15 +150,18 @@ export function PrinterManager() {
 
   const handleTestPrint = async (printer: Printer) => {
     try {
-      if (!printerService.isConnected(printer.id)) {
-        toast.info("Connexion Bluetooth en cours...");
-        await printerService.connectPrinter(printer);
-        setForceRender((prev) => prev + 1);
+      toast.info("Connexion / test Bluetooth…");
+      const reach = await probePrinter(printer);
+      if (!reach.ok) {
+        toast.error("Imprimante injoignable", { description: reach.detail });
+        return;
       }
       await printerService.printTest(printer);
       toast.success("Test d'impression envoyé !");
+      await probePrinter(printer);
     } catch (err: any) {
       toast.error("Échec de l'impression", { description: err.message });
+      await probePrinter(printer);
     }
   };
 
@@ -324,11 +376,12 @@ export function PrinterManager() {
 
         <div className="mt-4 border-t border-border pt-3">
           <label className="mb-1 block text-xs font-semibold text-muted-foreground">
-            Imprimante cuisine de secours (fallback)
+            Imprimante cuisine de secours (optionnel)
           </label>
           <p className="text-[11px] text-muted-foreground mb-2">
-            Si plaque/four échoue (timeout / circuit ouvert), les tickets restants sont
-            basculés vers cette imprimante au lieu de bloquer le worker.
+            Non requis. Laissez vide en fonctionnement normal : en cas d&apos;échec,
+            utilisez « Réimprimer cuisine » / « Relancer ». Le fallback n&apos;est utile
+            que si vous avez une seconde imprimante dédiée.
           </p>
           <select
             value={fallbackKitchenPrinterId ?? ""}
@@ -355,6 +408,44 @@ export function PrinterManager() {
               ))}
           </select>
         </div>
+
+        {activity.length > 0 && (
+          <div className="mt-4 border-t border-border pt-3">
+            <p className="text-xs font-semibold text-muted-foreground mb-2">
+              Activité impression (caisse + tests) — locale
+            </p>
+            <ul className="space-y-1 max-h-40 overflow-y-auto">
+              {activity.slice(0, 12).map((a) => (
+                <li
+                  key={a.id}
+                  className="flex flex-wrap items-center gap-2 text-xs text-foreground"
+                >
+                  <span className="text-muted-foreground">
+                    {new Date(a.at).toLocaleTimeString("fr-FR")}
+                  </span>
+                  <span className="uppercase font-semibold">{a.kind}</span>
+                  <span>{a.printerName}</span>
+                  <span
+                    className={
+                      a.status === "success"
+                        ? "text-success"
+                        : a.status === "error"
+                          ? "text-destructive"
+                          : "text-muted-foreground"
+                    }
+                  >
+                    {a.status}
+                  </span>
+                  {a.detail && (
+                    <span className="w-full text-muted-foreground truncate" title={a.detail}>
+                      {a.detail}
+                    </span>
+                  )}
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
 
         {recentJobs.length > 0 && (
           <div className="mt-4 border-t border-border pt-3">
@@ -406,31 +497,42 @@ export function PrinterManager() {
         )}
       </div>
 
-      <div className="mb-6 flex items-center justify-between">
+      <div className="mb-6 flex items-center justify-between gap-3 flex-wrap">
         <div>
           <h2 className="text-xl font-bold text-foreground">Gestion des Imprimantes</h2>
           <p className="text-sm text-muted-foreground">
             Configurez les imprimantes Bluetooth pour la caisse et la cuisine.
           </p>
         </div>
-        {!editingId && (
+        <div className="flex items-center gap-2">
           <button
             type="button"
-            onClick={() => {
-              setEditingId("new");
-              setFormData({
-                name: "",
-                type: "caisse",
-                categories: [],
-                category_ids: [],
-                enabled: true,
-              });
-            }}
-            className="flex items-center gap-2 rounded-xl bg-primary px-4 py-2.5 text-sm font-bold text-primary-foreground shadow-sm transition-all hover:-translate-y-0.5 active:translate-y-0"
+            onClick={() => void probeAll()}
+            disabled={probingAll || printers.length === 0}
+            className="flex items-center gap-2 rounded-xl border border-border bg-background px-3 py-2.5 text-sm font-semibold text-foreground hover:bg-muted disabled:opacity-50"
           >
-            <Plus className="h-4 w-4" /> Ajouter une imprimante
+            <RefreshCw className={`h-4 w-4 ${probingAll ? "animate-spin" : ""}`} />
+            Vérifier Bluetooth
           </button>
-        )}
+          {!editingId && (
+            <button
+              type="button"
+              onClick={() => {
+                setEditingId("new");
+                setFormData({
+                  name: "",
+                  type: "caisse",
+                  categories: [],
+                  category_ids: [],
+                  enabled: true,
+                });
+              }}
+              className="flex items-center gap-2 rounded-xl bg-primary px-4 py-2.5 text-sm font-bold text-primary-foreground shadow-sm transition-all hover:-translate-y-0.5 active:translate-y-0"
+            >
+              <Plus className="h-4 w-4" /> Ajouter une imprimante
+            </button>
+          )}
+        </div>
       </div>
 
       {isEditing("new") && renderForm()}
@@ -445,7 +547,12 @@ export function PrinterManager() {
             );
           }
 
-          const isConnected = printerService.isConnected(printer.id);
+          const reach = reachability[printer.id] ?? {
+            status: "unknown" as const,
+            detail: "Non vérifié",
+          };
+          const isOk = reach.status === "ok";
+          const isChecking = reach.status === "checking";
           const missingCats =
             (printer.type === "plaque" || printer.type === "four") &&
             (!printer.category_ids || printer.category_ids.length === 0);
@@ -465,23 +572,46 @@ export function PrinterManager() {
                   <div>
                     <h3 className="font-bold text-foreground">{printer.name}</h3>
                     <p className="text-xs text-muted-foreground capitalize">Poste : {printer.type}</p>
+                    <p className="text-[10px] font-mono text-muted-foreground mt-0.5">
+                      {printer.mac_address || "MAC manquante"}
+                    </p>
                   </div>
                 </div>
-                <div className="flex items-center gap-2">
-                  <span className="flex h-2 w-2 relative">
-                    <span
-                      className={`animate-ping absolute inline-flex h-full w-full rounded-full opacity-75 ${
-                        isConnected ? "bg-success" : "bg-destructive"
-                      }`}
-                    />
-                    <span
-                      className={`relative inline-flex rounded-full h-2 w-2 ${
-                        isConnected ? "bg-success" : "bg-destructive"
-                      }`}
-                    />
-                  </span>
-                  <span className="text-[10px] font-semibold text-muted-foreground">
-                    {isConnected ? "Connectée" : "Déconnectée"}
+                <div className="flex flex-col items-end gap-1">
+                  <div className="flex items-center gap-2">
+                    <span className="flex h-2 w-2 relative">
+                      {!isChecking && (
+                        <span
+                          className={`absolute inline-flex h-full w-full rounded-full opacity-75 ${
+                            isOk ? "bg-success animate-ping" : "bg-destructive"
+                          }`}
+                        />
+                      )}
+                      <span
+                        className={`relative inline-flex rounded-full h-2 w-2 ${
+                          isChecking
+                            ? "bg-amber-500"
+                            : isOk
+                              ? "bg-success"
+                              : "bg-destructive"
+                        }`}
+                      />
+                    </span>
+                    <span className="text-[10px] font-semibold text-muted-foreground">
+                      {isChecking
+                        ? "Vérif…"
+                        : isOk
+                          ? "Joignable"
+                          : reach.status === "unknown"
+                            ? "Inconnu"
+                            : "Injoignable"}
+                    </span>
+                  </div>
+                  <span
+                    className="text-[9px] text-muted-foreground max-w-[140px] text-right truncate"
+                    title={reach.detail}
+                  >
+                    {reach.detail}
                   </span>
                 </div>
               </div>
@@ -528,7 +658,7 @@ export function PrinterManager() {
                   disabled={!printer.enabled}
                   className="flex flex-1 items-center justify-center gap-1.5 rounded-lg border border-border bg-background py-2 text-xs font-semibold text-foreground hover:bg-muted disabled:opacity-50"
                 >
-                  {isConnected ? (
+                  {isOk ? (
                     <BluetoothConnected className="h-3.5 w-3.5 text-blue-500" />
                   ) : (
                     <Bluetooth className="h-3.5 w-3.5 text-muted-foreground" />

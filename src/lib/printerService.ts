@@ -7,6 +7,8 @@ import {
   KitchenAbortedError,
   nativeSendEscPos,
   getRadioMode,
+  forceDisconnectNative,
+  BT_HARD_SETTLE_MS,
 } from "@/lib/bluetoothRadio";
 import { openCircuit } from "@/lib/kitchenCircuitBreaker";
 
@@ -93,7 +95,7 @@ async function sendReceiptNative(
   printer: Printer,
   data: Uint8Array,
 ): Promise<void> {
-  if (!printer.mac_address) {
+  if (!printer.mac_address?.trim()) {
     throw new Error("Adresse MAC non configurée pour " + printer.name);
   }
   const { release } = await acquireReceiptRadio(printer.name);
@@ -101,8 +103,9 @@ async function sendReceiptNative(
     await nativeSendEscPos({
       priority: "receipt",
       printerName: printer.name,
-      macAddress: printer.mac_address,
+      macAddress: printer.mac_address.trim(),
       data,
+      skipPreSettle: true, // acquireReceiptRadio already hard-settled
     });
   } finally {
     release();
@@ -197,8 +200,84 @@ export const printerService = {
   },
 
   isConnected(printerId: string): boolean {
-    if (this.isNativePlatform()) return true;
+    // Synchronous snapshot only — Admin must use verifyPrinterReachable for real status.
+    if (this.isNativePlatform()) return false;
     return webConnectedDevices.has(printerId);
+  },
+
+  /**
+   * Real Bluetooth reachability check (connect ping + mandatory disconnect).
+   * Does not leave the socket open.
+   */
+  async verifyPrinterReachable(printer: Printer): Promise<{
+    ok: boolean;
+    detail: string;
+  }> {
+    if (!this.isNativePlatform()) {
+      const ok = webConnectedDevices.has(printer.id);
+      return {
+        ok,
+        detail: ok ? "Web Bluetooth connecté" : "Web Bluetooth non connecté",
+      };
+    }
+    const mac = (printer.mac_address ?? "").trim();
+    if (!mac) {
+      return { ok: false, detail: "Adresse MAC manquante" };
+    }
+
+    const { release } = await acquireReceiptRadio(`probe:${printer.name}`);
+    try {
+      await new Promise<void>((resolve, reject) => {
+        let done = false;
+        const finish = (fn: () => void) => {
+          if (done) return;
+          done = true;
+          clearTimeout(t);
+          fn();
+        };
+        const t = setTimeout(() => {
+          finish(() => {
+            void forceDisconnectNative(`probe-timeout:${printer.name}`).then(() =>
+              reject(new Error("Timeout ping Bluetooth (3s)")),
+            );
+          });
+        }, 3000);
+
+        window.bluetoothSerial.isEnabled(
+          () => {
+            console.log(`[BT] SOCKET_OPEN · probe · ${printer.name} · ${mac}`);
+            window.bluetoothSerial.connect(
+              mac,
+              () => {
+                console.log(`[BT] SOCKET_OPEN_OK · probe · ${printer.name}`);
+                void forceDisconnectNative(`probe-ok:${printer.name}`).then(() =>
+                  finish(() => resolve()),
+                );
+              },
+              (err: unknown) => {
+                console.log(`[BT] SOCKET_OPEN_ERR · probe · ${String(err)}`);
+                void forceDisconnectNative(`probe-err:${printer.name}`).then(() =>
+                  finish(() =>
+                    reject(new Error("Connexion impossible: " + String(err))),
+                  ),
+                );
+              },
+            );
+          },
+          () =>
+            finish(() =>
+              reject(new Error("Bluetooth désactivé sur la tablette")),
+            ),
+        );
+      });
+      await new Promise((r) => setTimeout(r, BT_HARD_SETTLE_MS));
+      return { ok: true, detail: "Joignable (ping OK)" };
+    } catch (err: unknown) {
+      const detail = err instanceof Error ? err.message : String(err);
+      return { ok: false, detail };
+    } finally {
+      release();
+    }
   },
 
   encodeText(text: string): Uint8Array {

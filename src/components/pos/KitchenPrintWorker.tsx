@@ -197,7 +197,7 @@ export function KitchenPrintWorker() {
       toast.error("Impression cuisine incomplète", {
         description:
           stationErrors.join(" · ") +
-          " — utilisez « Réimprimer cuisine » ou configurez une imprimante de secours.",
+          " — utilisez « Réimprimer cuisine » dans la commande.",
         duration: 8000,
       });
     };

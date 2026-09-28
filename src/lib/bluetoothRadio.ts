@@ -147,6 +147,7 @@ export async function acquireReceiptRadio(owner: string): Promise<{
   }
 
   mode = "receipt";
+  // Single hard settle here — nativeSendEscPos skips pre-settle when skipPreSettle
   await hardSettleRadio(`receipt-preempt:${owner}`);
 
   let released = false;
@@ -168,6 +169,8 @@ export type NativeSendOptions = {
   printerName: string;
   macAddress: string;
   data: Uint8Array;
+  /** When true, skip the opening hardSettle (caller already settled). */
+  skipPreSettle?: boolean;
 };
 
 /**
@@ -175,7 +178,7 @@ export type NativeSendOptions = {
  * Kitchen ops honor AbortSignal (receipt preempt).
  */
 export async function nativeSendEscPos(opts: NativeSendOptions): Promise<void> {
-  const { printerName, macAddress, data, signal } = opts;
+  const { printerName, macAddress, data, signal, skipPreSettle } = opts;
 
   const throwIfAborted = () => {
     if (signal?.aborted) {
@@ -184,7 +187,11 @@ export async function nativeSendEscPos(opts: NativeSendOptions): Promise<void> {
   };
 
   throwIfAborted();
-  await hardSettleRadio(`pre-connect:${printerName}`);
+  if (!skipPreSettle) {
+    await hardSettleRadio(`pre-connect:${printerName}`);
+  } else {
+    btLog("SOCKET_PRESETTLE_SKIP", printerName);
+  }
   throwIfAborted();
 
   await new Promise<void>((resolve, reject) => {
@@ -244,8 +251,15 @@ export async function nativeSendEscPos(opts: NativeSendOptions): Promise<void> {
           }
           btLog("SOCKET_OPEN_OK", `${printerName} · bytes=${data.byteLength}`);
 
+          // Critical: use a precise ArrayBuffer slice — data.buffer alone can be
+          // larger than the Uint8Array view and hang/corrupt the SPP write.
+          const writePayload = data.buffer.slice(
+            data.byteOffset,
+            data.byteOffset + data.byteLength,
+          );
+
           window.bluetoothSerial.write(
-            data.buffer,
+            writePayload,
             () => {
               if (settled) {
                 btLog("SOCKET_WRITE_LATE", printerName);
@@ -265,29 +279,19 @@ export async function nativeSendEscPos(opts: NativeSendOptions): Promise<void> {
                   onAbort();
                   return;
                 }
-                btLog("SOCKET_CLOSE", `${printerName} · after-write`);
-                window.bluetoothSerial.disconnect(
-                  () => {
-                    btLog("SOCKET_CLOSE_OK", `${printerName} · after-write`);
-                    finish(() => {
-                      void sleep(BT_HARD_SETTLE_MS).then(() => {
-                        btLog(
-                          "SOCKET_SETTLE_DONE",
-                          `${printerName} · ${BT_HARD_SETTLE_MS}ms`,
-                        );
-                        resolve();
-                      });
-                    });
-                  },
-                  (e: unknown) => {
-                    btLog("SOCKET_CLOSE_ERR", `${printerName} · ${String(e)}`);
-                    finish(() => {
-                      void sleep(BT_HARD_SETTLE_MS).then(() =>
-                        reject(new Error(String(e))),
-                      );
-                    });
-                  },
-                );
+                // Explicit close: await disconnect callback before settle/resolve
+                btLog("SOCKET_CLOSE", `${printerName} · after-write-flush`);
+                await forceDisconnectNative(`after-write:${printerName}`);
+                if (settled) return;
+                finish(() => {
+                  void sleep(BT_HARD_SETTLE_MS).then(() => {
+                    btLog(
+                      "SOCKET_SETTLE_DONE",
+                      `${printerName} · ${BT_HARD_SETTLE_MS}ms`,
+                    );
+                    resolve();
+                  });
+                });
               })();
             },
             (err: unknown) => {

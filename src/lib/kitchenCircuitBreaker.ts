@@ -1,9 +1,10 @@
 /**
  * Per-MAC circuit breaker for kitchen Bluetooth printers.
  * After one failure, skip connects to that MAC until the open window expires.
+ * Keep short — restaurant pace cannot wait a minute on a dead socket.
  */
 
-const CIRCUIT_OPEN_MS = 60_000;
+const CIRCUIT_OPEN_MS = 5_000;
 
 type CircuitState = {
   openUntil: number;

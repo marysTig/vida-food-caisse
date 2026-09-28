@@ -15,8 +15,8 @@ import { useTableOrdersStore } from "@/lib/tableOrdersStore";
 import { useSessionStore } from "@/lib/authStore";
 import { supabase } from "@/lib/supabase";
 import { usePrinterStore } from "@/lib/printerStore";
-import { printerService } from "@/lib/printerService";
 import { enqueueKitchenPrint } from "@/lib/kitchenPrintQueue";
+import { runCashierReceiptPrint } from "@/lib/cashierPrint";
 import { toast } from "sonner";
 import { ComponentLoader } from "@/components/ui/PageLoader";
 import { recordZReport } from "@/lib/zReport";
@@ -731,24 +731,14 @@ export function TableOrderSidebar({ tableId, tableNumber, mergedIds, onClose }: 
       }
     }
 
-    // --- IMPRESSION CAISSE (isolée — préempte la cuisine, ne partage pas le mutex) ---
-    try {
-      const cashierPrinters = printers.filter(p => p.enabled && p.type === "caisse");
-      if (cashierPrinters.length === 0) {
-        console.warn("Aucune imprimante de caisse trouvée.");
-        toast.warning("Aucune imprimante de caisse configurée.");
-      }
-      for (const printer of cashierPrinters) {
-        try {
-          await printerService.printReceiptIsolated(printer, itemsToPrint, totalToPrint, receiptLabel, activeSupplements);
-        } catch (err: any) {
-          console.error("Erreur d'impression caisse:", err);
-          toast.error("Erreur d'impression caisse", { description: err.message });
-        }
-      }
-    } catch (err) {
-      console.error("Impossible de lancer l'impression caisse", err);
-    }
+    // --- IMPRESSION CAISSE (toujours déclenchée, logs + toasts visibles) ---
+    await runCashierReceiptPrint({
+      printers,
+      items: itemsToPrint,
+      total: totalToPrint,
+      label: receiptLabel,
+      globalSupplements: activeSupplements,
+    });
 
     onClose();
   };

@@ -12,7 +12,7 @@ import { useTableOrdersStore } from "@/lib/tableOrdersStore";
 import { supabase } from "@/lib/supabase";
 import { ComponentLoader } from "@/components/ui/PageLoader";
 import { usePrinterStore } from "@/lib/printerStore";
-import { printerService } from "@/lib/printerService";
+import { runCashierReceiptPrint } from "@/lib/cashierPrint";
 import { cartSubtotal, type CartItem } from "@/lib/cart";
 import { toast } from "sonner";
 import { useSessionStore } from "@/lib/authStore";
@@ -122,30 +122,14 @@ function EmporterPage() {
       occupiedSince: null as any,
     });
     
-    // --- IMPRESSION CAISSE (isolée — préempte la cuisine) ---
-    try {
-      const cashierPrinters = printers.filter(p => p.enabled && p.type === "caisse");
-      if (cashierPrinters.length === 0) {
-        console.warn("Aucune imprimante de caisse trouvée.");
-        toast.warning("Aucune imprimante de caisse configurée.");
-      }
-      for (const printer of cashierPrinters) {
-        try {
-          await printerService.printReceiptIsolated(
-            printer,
-            itemsToPrint,
-            cartSubtotal(itemsToPrint),
-            `À EMPORTER — Commande #${checkoutTable.number}`,
-            supplementsToPrint,
-          );
-        } catch (err: any) {
-          console.error("Erreur d'impression caisse:", err);
-          toast.error("Erreur d'impression caisse", { description: err.message });
-        }
-      }
-    } catch (err) {
-      console.error("Impossible de lancer l'impression caisse", err);
-    }
+    // --- IMPRESSION CAISSE (toujours déclenchée, logs + toasts visibles) ---
+    await runCashierReceiptPrint({
+      printers,
+      items: itemsToPrint,
+      total: cartSubtotal(itemsToPrint),
+      label: `À EMPORTER — Commande #${checkoutTable.number}`,
+      globalSupplements: supplementsToPrint,
+    });
     // -------------------------
 
     setCheckoutTable(null);

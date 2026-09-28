@@ -13,7 +13,7 @@ import { useTableStore, type TableItem } from "@/lib/tableStore";
 import { useTableOrdersStore } from "@/lib/tableOrdersStore";
 import { useSessionStore } from "@/lib/authStore";
 import { usePrinterStore } from "@/lib/printerStore";
-import { printerService } from "@/lib/printerService";
+import { runCashierReceiptPrint } from "@/lib/cashierPrint";
 import { supabase } from "@/lib/supabase";
 import { cartSubtotal, type CartItem } from "@/lib/cart";
 import { toast } from "sonner";
@@ -514,20 +514,14 @@ function TablesPage() {
 
     setCheckoutTable(null);
 
-    // --- IMPRESSION CAISSE (isolée — préempte la cuisine) ---
-    try {
-      const cashierPrinters = printers.filter(p => p.enabled && p.type === "caisse");
-      for (const printer of cashierPrinters) {
-        try {
-          await printerService.printReceiptIsolated(printer, itemsToPrint, totalToPrint, tableNumberStr, supplementsToPrint);
-        } catch (err: any) {
-          console.error("Erreur d'impression caisse:", err);
-          toast.error("Erreur d'impression caisse", { description: err.message });
-        }
-      }
-    } catch (err) {
-      console.error("Impossible de lancer l'impression caisse", err);
-    }
+    // --- IMPRESSION CAISSE (toujours déclenchée, logs + toasts visibles) ---
+    await runCashierReceiptPrint({
+      printers,
+      items: itemsToPrint,
+      total: totalToPrint,
+      label: tableNumberStr,
+      globalSupplements: supplementsToPrint,
+    });
     // -------------------------
   };
 
