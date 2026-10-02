@@ -247,11 +247,17 @@ export async function acquireReceiptRadio(owner: string): Promise<{
 
   mode = "receipt";
   // Only hard settle if we just violently preempted a hung kitchen connect
+  let settleMs = 0;
   if (preemptedKitchen) {
+    const tSettle = Date.now();
     await hardSettleRadio(`receipt-preempt:${owner}`);
     btLog("RECEIPT_PREEMPT_EXTRA", `${BT_RECEIPT_PREEMPT_EXTRA_MS}ms`);
     await sleep(BT_RECEIPT_PREEMPT_EXTRA_MS);
+    settleMs = Date.now() - tSettle;
   }
+  // #region agent log
+  fetch('http://127.0.0.1:7680/ingest/b490126b-dfa2-4a19-9733-3902cacf3768',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'c5e869'},body:JSON.stringify({sessionId:'c5e869',runId:'caisse-latency',hypothesisId:'B',location:'bluetoothRadio.ts:acquireReceiptRadio',message:'receipt_acquire_done',data:{owner,waitedMs:Date.now()-waitStart-settleMs,preemptedKitchen,settleMs,totalAcquireMs:Date.now()-waitStart},timestamp:Date.now()})}).catch(()=>{});
+  // #endregion
 
   let released = false;
   return {

@@ -59,9 +59,17 @@ async function sendJobBytes(job: PrintJob, data: Uint8Array): Promise<"ok" | "ab
   if (!mac) throw new Error("Adresse MAC manquante");
 
   if (job.job_type === "receipt") {
+    const t0 = Date.now();
+    // #region agent log
+    fetch('http://127.0.0.1:7680/ingest/b490126b-dfa2-4a19-9733-3902cacf3768',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'c5e869'},body:JSON.stringify({sessionId:'c5e869',runId:'caisse-latency',hypothesisId:'A',location:'printQueueDaemon.ts:sendJobBytes',message:'receipt_send_begin',data:{jobId:job.id,name,t:t0},timestamp:Date.now()})}).catch(()=>{});
+    // #endregion
     const { release } = await acquireReceiptRadio(`daemon-receipt:${job.id}`);
+    // #region agent log
+    fetch('http://127.0.0.1:7680/ingest/b490126b-dfa2-4a19-9733-3902cacf3768',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'c5e869'},body:JSON.stringify({sessionId:'c5e869',runId:'caisse-latency',hypothesisId:'B',location:'printQueueDaemon.ts:sendJobBytes',message:'receipt_radio_acquired',data:{jobId:job.id,acquireMs:Date.now()-t0},timestamp:Date.now()})}).catch(()=>{});
+    // #endregion
     try {
       // Momentary caisse: skip trailing settle (acquire already settled once)
+      const tSend = Date.now();
       await nativeSendEscPos({
         priority: "receipt",
         printerName: name,
@@ -70,6 +78,9 @@ async function sendJobBytes(job: PrintJob, data: Uint8Array): Promise<"ok" | "ab
         skipPreSettle: true,
         skipPostSettle: true,
       });
+      // #region agent log
+      fetch('http://127.0.0.1:7680/ingest/b490126b-dfa2-4a19-9733-3902cacf3768',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'c5e869'},body:JSON.stringify({sessionId:'c5e869',runId:'caisse-latency',hypothesisId:'E',location:'printQueueDaemon.ts:sendJobBytes',message:'receipt_send_ok',data:{jobId:job.id,sendMs:Date.now()-tSend,totalMs:Date.now()-t0},timestamp:Date.now()})}).catch(()=>{});
+      // #endregion
       lastSuccessMac = mac;
       return "ok";
     } finally {
@@ -186,6 +197,11 @@ async function processJob(job: PrintJob): Promise<void> {
     `[PRINT DAEMON] ${job.job_type} → ${job.printer_name} (attempt ${job.attempt_count + 1})`,
   );
   console.log(`[PRINT START] ${job.printer_name}`);
+  // #region agent log
+  if (job.job_type === "receipt") {
+    fetch('http://127.0.0.1:7680/ingest/b490126b-dfa2-4a19-9733-3902cacf3768',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'c5e869'},body:JSON.stringify({sessionId:'c5e869',runId:'caisse-latency',hypothesisId:'A',location:'printQueueDaemon.ts:processJob',message:'receipt_claimed',data:{jobId:job.id,printer:job.printer_name,attempt:job.attempt_count+1,t:Date.now()},timestamp:Date.now()})}).catch(()=>{});
+  }
+  // #endregion
 
   try {
     const result = await sendJobBytes(job, data);
