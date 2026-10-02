@@ -116,12 +116,24 @@ function lineCategoryId(item: CartItem): string | undefined {
 }
 
 async function sha256Hex(input: string): Promise<string> {
-  const data = new TextEncoder().encode(input);
-  if (typeof crypto !== "undefined" && crypto.subtle) {
-    const hash = await crypto.subtle.digest("SHA-256", data);
-    return Array.from(new Uint8Array(hash))
-      .map((b) => b.toString(16).padStart(2, "0"))
-      .join("");
+  // Prefer Web Crypto, but never hang the print pipeline if subtle.digest stalls
+  // (seen on some Android WebViews under load).
+  try {
+    if (typeof crypto !== "undefined" && crypto.subtle) {
+      const digestPromise = crypto.subtle.digest(
+        "SHA-256",
+        new TextEncoder().encode(input),
+      );
+      const timeoutPromise = new Promise<never>((_, reject) => {
+        setTimeout(() => reject(new Error("sha256-timeout")), 2000);
+      });
+      const hash = await Promise.race([digestPromise, timeoutPromise]);
+      return Array.from(new Uint8Array(hash))
+        .map((b) => b.toString(16).padStart(2, "0"))
+        .join("");
+    }
+  } catch {
+    /* fall through to sync hash */
   }
   let h = 0;
   for (let i = 0; i < input.length; i++) {
@@ -191,6 +203,10 @@ export type EnqueueKitchenParams = {
 export async function enqueueKitchenStations(
   params: EnqueueKitchenParams,
 ): Promise<EnqueueKitchenResult> {
+  console.log("[KITCHEN ENQUEUE] begin", {
+    tableId: params.tableId,
+    label: params.orderLabel,
+  });
   const store = useTableOrdersStore.getState();
   const items = params.items ?? store.orders[params.tableId] ?? [];
   const orderNote =
@@ -201,6 +217,11 @@ export async function enqueueKitchenStations(
   const kitchenPrinters = enabledKitchenPrinters(printers);
 
   const delta = getKitchenDelta(items);
+  console.log("[KITCHEN ENQUEUE] delta", {
+    items: items.length,
+    delta: delta.length,
+    kitchenPrinters: kitchenPrinters.length,
+  });
   if (delta.length === 0) {
     return { status: "noop", reason: "empty_delta" };
   }
@@ -229,13 +250,19 @@ export async function enqueueKitchenStations(
   }
 
   const baseKey = await buildIdempotencyKey(params.tableId, delta);
+  console.log("[KITCHEN ENQUEUE] stations", stations.length, "key", baseKey.slice(0, 12));
   const now = new Date().toISOString();
   const jobIds: string[] = [];
+  let skippedNoMac = 0;
 
   for (const station of stations) {
     const printer = kitchenPrinters.find((p) => p.id === station.printerId);
     const mac = (printer?.mac_address ?? "").trim();
-    if (!printer || !mac) continue;
+    if (!printer || !mac) {
+      skippedNoMac += 1;
+      console.warn("[KITCHEN ENQUEUE] skip station without MAC", station.printerName);
+      continue;
+    }
 
     const stationFps: Record<string, string> = {};
     for (const item of station.lines) {
@@ -276,11 +303,25 @@ export async function enqueueKitchenStations(
       updated_at: now,
     };
 
-    const { data, error } = await supabase
+    console.log("[KITCHEN ENQUEUE] insert", printer.name);
+    const insertPromise = supabase
       .from("print_jobs")
       .insert(row)
       .select("id")
       .maybeSingle();
+    const timeoutPromise = new Promise<{ data: null; error: { message: string; code?: string } }>(
+      (resolve) => {
+        setTimeout(
+          () =>
+            resolve({
+              data: null,
+              error: { message: "Timeout insertion print_jobs (15s)" },
+            }),
+          15_000,
+        );
+      },
+    );
+    const { data, error } = await Promise.race([insertPromise, timeoutPromise]);
 
     if (error) {
       if (error.code === "23505") {
@@ -319,8 +360,17 @@ export async function enqueueKitchenStations(
   }
 
   if (jobIds.length === 0) {
+    if (skippedNoMac > 0) {
+      return {
+        status: "error",
+        message:
+          "Imprimante(s) cuisine sans adresse MAC — associez-les dans Admin → Imprimantes.",
+      };
+    }
+    console.log("[KITCHEN ENQUEUE] noop duplicate");
     return { status: "noop", reason: "duplicate" };
   }
+  console.log("[KITCHEN ENQUEUE] ok", jobIds);
   return { status: "enqueued", jobIds };
 }
 
@@ -384,7 +434,8 @@ export async function enqueueReceipt(
     payload.globalSupplements = params.globalSupplements;
   }
 
-  const { data, error } = await supabase
+  console.log("[print_jobs] receipt insert…");
+  const insertPromise = supabase
     .from("print_jobs")
     .insert({
       table_id: tableIdForDb,
@@ -402,6 +453,20 @@ export async function enqueueReceipt(
     })
     .select("id")
     .maybeSingle();
+  const timeoutPromise = new Promise<{
+    data: null;
+    error: { message: string; code?: string };
+  }>((resolve) => {
+    setTimeout(
+      () =>
+        resolve({
+          data: null,
+          error: { message: "Timeout insertion ticket caisse (15s)" },
+        }),
+      15_000,
+    );
+  });
+  const { data, error } = await Promise.race([insertPromise, timeoutPromise]);
 
   if (error) {
     if (error.code === "23505") {
@@ -410,6 +475,7 @@ export async function enqueueReceipt(
     console.error("[print_jobs] receipt enqueue error:", error.message);
     return { status: "error", message: error.message };
   }
+  console.log("[print_jobs] receipt enqueued", data?.id);
   return { status: "enqueued", jobId: (data?.id as string) ?? "" };
 }
 

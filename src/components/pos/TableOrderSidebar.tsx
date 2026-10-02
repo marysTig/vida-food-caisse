@@ -652,38 +652,41 @@ export function TableOrderSidebar({ tableId, tableNumber, mergedIds, onClose }: 
     }
 
     // --- FILE D'ATTENTE CUISINE (delta, idempotent, hub primaire) ---
-    try {
-      const result = await enqueueKitchenPrint({
-        tableId,
-        orderLabel: kitchenOrderLabel,
-        items,
-        orderNote,
-        globalSupplements: activeSupplements,
-        printers,
-      });
+    // Fire-and-forget: never block Valider / close on DB insert (logcat showed
+    // SERVER ORDER with no enqueue completion when insert stalled).
+    void (async () => {
+      try {
+        const result = await enqueueKitchenPrint({
+          tableId,
+          orderLabel: kitchenOrderLabel,
+          items,
+          orderNote,
+          globalSupplements: activeSupplements,
+          printers,
+        });
 
-      if (result.status === "blocked_unmapped") {
-        toast.error("Catégories non associées à une imprimante cuisine", {
-          description: result.unmappedNames.join(", "),
-          duration: 8000,
-        });
-      } else if (result.status === "error") {
-        toast.error("Impossible d'envoyer en cuisine", {
-          description: result.message,
-        });
-      } else if (result.status === "enqueued") {
-        toast.success(isOccupied ? "Mise à jour envoyée en cuisine" : "Commande envoyée en cuisine");
-        wakePrintQueueDaemon();
-      } else if (result.status === "noop" && result.reason === "empty_delta") {
-        // Rien de nouveau — silence volontaire (évite le bruit sur double-valider)
-        console.log("[KITCHEN] No delta to print for", tableId);
-      } else if (result.status === "noop" && result.reason === "duplicate") {
-        console.log("[KITCHEN] Duplicate idempotency key — already queued");
+        if (result.status === "blocked_unmapped") {
+          toast.error("Catégories non associées à une imprimante cuisine", {
+            description: result.unmappedNames.join(", "),
+            duration: 8000,
+          });
+        } else if (result.status === "error") {
+          toast.error("Impossible d'envoyer en cuisine", {
+            description: result.message,
+          });
+        } else if (result.status === "enqueued") {
+          toast.success(isOccupied ? "Mise à jour envoyée en cuisine" : "Commande envoyée en cuisine");
+          wakePrintQueueDaemon();
+        } else if (result.status === "noop" && result.reason === "empty_delta") {
+          console.log("[KITCHEN] No delta to print for", tableId);
+        } else if (result.status === "noop" && result.reason === "duplicate") {
+          console.log("[KITCHEN] Duplicate idempotency key — already queued");
+        }
+      } catch (err) {
+        console.error("Impossible de lancer l'impression cuisine", err);
+        toast.error("Erreur lors de l'envoi cuisine");
       }
-    } catch (err) {
-      console.error("Impossible de lancer l'impression cuisine", err);
-      toast.error("Erreur lors de l'envoi cuisine");
-    }
+    })();
 
     onClose();
   };

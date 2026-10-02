@@ -341,9 +341,9 @@ export function startPrintQueueDaemon(): () => void {
         draining = false;
       }
 
-      // Short idle poll — wake + pendingWake handle instant enqueue; 1500ms was
-      // amplifying lost-wakeup into ~1s caisse delay (logcat 21:43:16→17).
-      await waitForWake(200);
+      // Empty-queue poll. Wake + pendingWake make Encaisser instant; keep this
+      // ≥1s so we do not hammer print_jobs claim (was 200ms → DB pressure).
+      await waitForWake(1000);
     }
     console.log("[PRINT DAEMON] Stopped");
   };
