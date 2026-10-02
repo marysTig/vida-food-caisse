@@ -30,6 +30,73 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+/**
+ * ESC/POS printers almost always need insecure RFCOMM (SPP UUID 1101).
+ * Prefer connectInsecure; fall back to secure connect once if needed.
+ */
+export function nativeConnect(
+  macAddress: string,
+  label: string,
+): Promise<"insecure" | "secure"> {
+  return new Promise((resolve, reject) => {
+    const bs = window.bluetoothSerial;
+    if (!bs) {
+      reject(new Error("Bluetooth Serial non disponible"));
+      return;
+    }
+
+    const trySecure = () => {
+      btLog("SOCKET_OPEN_SECURE", `${label} · ${macAddress}`);
+      // #region agent log
+      fetch('http://127.0.0.1:7680/ingest/b490126b-dfa2-4a19-9733-3902cacf3768',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'c5e869'},body:JSON.stringify({sessionId:'c5e869',runId:'post-fix',hypothesisId:'G',location:'bluetoothRadio.ts:nativeConnect',message:'try_secure',data:{label},timestamp:Date.now()})}).catch(()=>{});
+      // #endregion
+      bs.connect(
+        macAddress,
+        () => {
+          btLog("SOCKET_OPEN_OK", `${label} · secure`);
+          // #region agent log
+          fetch('http://127.0.0.1:7680/ingest/b490126b-dfa2-4a19-9733-3902cacf3768',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'c5e869'},body:JSON.stringify({sessionId:'c5e869',runId:'post-fix',hypothesisId:'G',location:'bluetoothRadio.ts:nativeConnect',message:'connect_ok',data:{label,mode:'secure'},timestamp:Date.now()})}).catch(()=>{});
+          // #endregion
+          resolve("secure");
+        },
+        (err: unknown) => {
+          btLog("SOCKET_OPEN_ERR", `${label} · secure · ${String(err)}`);
+          reject(err instanceof Error ? err : new Error(String(err)));
+        },
+      );
+    };
+
+    if (typeof bs.connectInsecure === "function") {
+      btLog("SOCKET_OPEN_INSECURE", `${label} · ${macAddress}`);
+      // #region agent log
+      fetch('http://127.0.0.1:7680/ingest/b490126b-dfa2-4a19-9733-3902cacf3768',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'c5e869'},body:JSON.stringify({sessionId:'c5e869',runId:'post-fix',hypothesisId:'G',location:'bluetoothRadio.ts:nativeConnect',message:'try_insecure',data:{label},timestamp:Date.now()})}).catch(()=>{});
+      // #endregion
+      bs.connectInsecure(
+        macAddress,
+        () => {
+          btLog("SOCKET_OPEN_OK", `${label} · insecure`);
+          // #region agent log
+          fetch('http://127.0.0.1:7680/ingest/b490126b-dfa2-4a19-9733-3902cacf3768',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'c5e869'},body:JSON.stringify({sessionId:'c5e869',runId:'post-fix',hypothesisId:'G',location:'bluetoothRadio.ts:nativeConnect',message:'connect_ok',data:{label,mode:'insecure'},timestamp:Date.now()})}).catch(()=>{});
+          // #endregion
+          resolve("insecure");
+        },
+        (err: unknown) => {
+          btLog("SOCKET_OPEN_ERR", `${label} · insecure · ${String(err)}`);
+          // #region agent log
+          fetch('http://127.0.0.1:7680/ingest/b490126b-dfa2-4a19-9733-3902cacf3768',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'c5e869'},body:JSON.stringify({sessionId:'c5e869',runId:'post-fix',hypothesisId:'G',location:'bluetoothRadio.ts:nativeConnect',message:'insecure_fail_try_secure',data:{label,err:String(err)},timestamp:Date.now()})}).catch(()=>{});
+          // #endregion
+          void forceDisconnectNative(`insecure-fail:${label}`).then(() =>
+            trySecure(),
+          );
+        },
+      );
+      return;
+    }
+
+    trySecure();
+  });
+}
+
 type KitchenSession = {
   abortController: AbortController;
   release: () => void;
@@ -313,9 +380,8 @@ export async function nativeSendEscPos(opts: NativeSendOptions): Promise<void> {
     const doConnect = () => {
       console.log(`[CONNECT START] ${printerName}`);
       btLog("SOCKET_OPEN", `${printerName} · ${macAddress}`);
-      window.bluetoothSerial.connect(
-        macAddress,
-        () => {
+      void nativeConnect(macAddress, printerName)
+        .then(() => {
           if (settled) {
             btLog("SOCKET_OPEN_LATE", printerName);
             void forceDisconnectNative(`late-open:${printerName}`);
@@ -377,8 +443,8 @@ export async function nativeSendEscPos(opts: NativeSendOptions): Promise<void> {
               );
             },
           );
-        },
-        (err: unknown) => {
+        })
+        .catch((err: unknown) => {
           btLog("SOCKET_OPEN_ERR", `${printerName} · ${String(err)}`);
           void forceDisconnectNative(`open-err:${printerName}`).then(
             () => finish(() =>
@@ -389,8 +455,7 @@ export async function nativeSendEscPos(opts: NativeSendOptions): Promise<void> {
               ),
             ),
           );
-        },
-      );
+        });
     };
 
     window.bluetoothSerial.isEnabled(

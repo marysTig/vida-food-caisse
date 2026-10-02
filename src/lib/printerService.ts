@@ -6,6 +6,7 @@ import {
   acquireProbeRadio,
   acquireReceiptRadio,
   KitchenAbortedError,
+  nativeConnect,
   nativeSendEscPos,
   getRadioMode,
   forceDisconnectNative,
@@ -264,26 +265,24 @@ export const printerService = {
         window.bluetoothSerial.isEnabled(
           () => {
             console.log(`[BT] SOCKET_OPEN · probe · ${printer.name} · ${mac}`);
-            window.bluetoothSerial.connect(
-              mac,
-              () => {
+            void nativeConnect(mac, `probe:${printer.name}`)
+              .then(() => {
                 console.log(`[BT] SOCKET_OPEN_OK · probe · ${printer.name}`);
                 void forceDisconnectNative(`probe-ok:${printer.name}`).then(() =>
                   finish(() => resolve()),
                 );
-              },
-              (err: unknown) => {
+              })
+              .catch((err: unknown) => {
                 console.log(`[BT] SOCKET_OPEN_ERR · probe · ${String(err)}`);
                 // #region agent log
-                fetch('http://127.0.0.1:7680/ingest/b490126b-dfa2-4a19-9733-3902cacf3768',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'c5e869'},body:JSON.stringify({sessionId:'c5e869',runId:'post-fix',hypothesisId:'D',location:'printerService.ts:probe-err',message:'probe_connect_err',data:{name:printer.name,err:String(err),elapsedMs:Date.now()-_probeT0},timestamp:Date.now()})}).catch(()=>{});
+                fetch('http://127.0.0.1:7680/ingest/b490126b-dfa2-4a19-9733-3902cacf3768',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'c5e869'},body:JSON.stringify({sessionId:'c5e869',runId:'post-fix',hypothesisId:'G',location:'printerService.ts:probe-err',message:'probe_connect_err',data:{name:printer.name,err:String(err),elapsedMs:Date.now()-_probeT0},timestamp:Date.now()})}).catch(()=>{});
                 // #endregion
                 void forceDisconnectNative(`probe-err:${printer.name}`).then(() =>
                   finish(() =>
                     reject(new Error("Connexion impossible: " + String(err))),
                   ),
                 );
-              },
-            );
+              });
           },
           () =>
             finish(() =>
