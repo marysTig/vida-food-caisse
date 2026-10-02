@@ -31,8 +31,9 @@ function sleep(ms: number): Promise<void> {
 }
 
 /**
- * ESC/POS printers almost always need insecure RFCOMM (SPP UUID 1101).
- * Prefer connectInsecure; fall back to secure connect once if needed.
+ * ESC/POS SPP: use connectInsecure only.
+ * Secure fallback was proven to start a second ConnectThread while the first
+ * was still in "Trying fallback..." → Peer connection failed[16] / Injoignable.
  */
 export function nativeConnect(
   macAddress: string,
@@ -45,55 +46,41 @@ export function nativeConnect(
       return;
     }
 
-    const trySecure = () => {
-      btLog("SOCKET_OPEN_SECURE", `${label} · ${macAddress}`);
+    const onOk = (mode: "insecure" | "secure") => {
+      btLog("SOCKET_OPEN_OK", `${label} · ${mode}`);
       // #region agent log
-      fetch('http://127.0.0.1:7680/ingest/b490126b-dfa2-4a19-9733-3902cacf3768',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'c5e869'},body:JSON.stringify({sessionId:'c5e869',runId:'post-fix',hypothesisId:'G',location:'bluetoothRadio.ts:nativeConnect',message:'try_secure',data:{label},timestamp:Date.now()})}).catch(()=>{});
+      fetch('http://127.0.0.1:7680/ingest/b490126b-dfa2-4a19-9733-3902cacf3768',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'c5e869'},body:JSON.stringify({sessionId:'c5e869',runId:'post-fix',hypothesisId:'H',location:'bluetoothRadio.ts:nativeConnect',message:'connect_ok',data:{label,mode},timestamp:Date.now()})}).catch(()=>{});
       // #endregion
-      bs.connect(
-        macAddress,
-        () => {
-          btLog("SOCKET_OPEN_OK", `${label} · secure`);
-          // #region agent log
-          fetch('http://127.0.0.1:7680/ingest/b490126b-dfa2-4a19-9733-3902cacf3768',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'c5e869'},body:JSON.stringify({sessionId:'c5e869',runId:'post-fix',hypothesisId:'G',location:'bluetoothRadio.ts:nativeConnect',message:'connect_ok',data:{label,mode:'secure'},timestamp:Date.now()})}).catch(()=>{});
-          // #endregion
-          resolve("secure");
-        },
-        (err: unknown) => {
-          btLog("SOCKET_OPEN_ERR", `${label} · secure · ${String(err)}`);
-          reject(err instanceof Error ? err : new Error(String(err)));
-        },
-      );
+      resolve(mode);
+    };
+
+    const onErr = (mode: string, err: unknown) => {
+      btLog("SOCKET_OPEN_ERR", `${label} · ${mode} · ${String(err)}`);
+      // #region agent log
+      fetch('http://127.0.0.1:7680/ingest/b490126b-dfa2-4a19-9733-3902cacf3768',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'c5e869'},body:JSON.stringify({sessionId:'c5e869',runId:'post-fix',hypothesisId:'H',location:'bluetoothRadio.ts:nativeConnect',message:'connect_err',data:{label,mode,err:String(err)},timestamp:Date.now()})}).catch(()=>{});
+      // #endregion
+      reject(err instanceof Error ? err : new Error(String(err)));
     };
 
     if (typeof bs.connectInsecure === "function") {
       btLog("SOCKET_OPEN_INSECURE", `${label} · ${macAddress}`);
       // #region agent log
-      fetch('http://127.0.0.1:7680/ingest/b490126b-dfa2-4a19-9733-3902cacf3768',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'c5e869'},body:JSON.stringify({sessionId:'c5e869',runId:'post-fix',hypothesisId:'G',location:'bluetoothRadio.ts:nativeConnect',message:'try_insecure',data:{label},timestamp:Date.now()})}).catch(()=>{});
+      fetch('http://127.0.0.1:7680/ingest/b490126b-dfa2-4a19-9733-3902cacf3768',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'c5e869'},body:JSON.stringify({sessionId:'c5e869',runId:'post-fix',hypothesisId:'H',location:'bluetoothRadio.ts:nativeConnect',message:'try_insecure_only',data:{label},timestamp:Date.now()})}).catch(()=>{});
       // #endregion
       bs.connectInsecure(
         macAddress,
-        () => {
-          btLog("SOCKET_OPEN_OK", `${label} · insecure`);
-          // #region agent log
-          fetch('http://127.0.0.1:7680/ingest/b490126b-dfa2-4a19-9733-3902cacf3768',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'c5e869'},body:JSON.stringify({sessionId:'c5e869',runId:'post-fix',hypothesisId:'G',location:'bluetoothRadio.ts:nativeConnect',message:'connect_ok',data:{label,mode:'insecure'},timestamp:Date.now()})}).catch(()=>{});
-          // #endregion
-          resolve("insecure");
-        },
-        (err: unknown) => {
-          btLog("SOCKET_OPEN_ERR", `${label} · insecure · ${String(err)}`);
-          // #region agent log
-          fetch('http://127.0.0.1:7680/ingest/b490126b-dfa2-4a19-9733-3902cacf3768',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'c5e869'},body:JSON.stringify({sessionId:'c5e869',runId:'post-fix',hypothesisId:'G',location:'bluetoothRadio.ts:nativeConnect',message:'insecure_fail_try_secure',data:{label,err:String(err)},timestamp:Date.now()})}).catch(()=>{});
-          // #endregion
-          void forceDisconnectNative(`insecure-fail:${label}`).then(() =>
-            trySecure(),
-          );
-        },
+        () => onOk("insecure"),
+        (err: unknown) => onErr("insecure", err),
       );
       return;
     }
 
-    trySecure();
+    btLog("SOCKET_OPEN_SECURE", `${label} · ${macAddress}`);
+    bs.connect(
+      macAddress,
+      () => onOk("secure"),
+      (err: unknown) => onErr("secure", err),
+    );
   });
 }
 

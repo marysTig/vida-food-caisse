@@ -22,7 +22,8 @@ import {
 export const PRIORITY_RECEIPT = 100;
 export const PRIORITY_KITCHEN = 10;
 export const MAX_PRINT_ATTEMPTS = 3;
-export const RETRY_BACKOFF_MS = 2500;
+/** Longer backoff after failures so RFCOMM can settle (was 2.5s → thrash). */
+export const RETRY_BACKOFF_MS = 8000;
 export const INTER_PRINTER_GAP_MS = 4000;
 /** Short cool-down when caisse switches MAC (not the full 4s kitchen gap). */
 export const RECEIPT_MAC_COOLDOWN_MS = 1500;
