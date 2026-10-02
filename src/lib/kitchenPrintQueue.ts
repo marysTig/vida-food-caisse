@@ -345,13 +345,14 @@ export async function enqueueReceipt(
   params: EnqueueReceiptParams,
 ): Promise<EnqueueReceiptResult> {
   const printers = params.printers ?? getPrintersFromStore();
-  const caissePrinters = printers.filter(
+  const caisse = printers.find(
     (p) => p.enabled && p.type === "caisse" && (p.mac_address || "").trim() !== "",
   );
-
-  if (caissePrinters.length === 0) {
+  if (!caisse) {
     return { status: "noop", reason: "no_printer" };
   }
+
+  const mac = caisse.mac_address!.trim();
 
   // table_id column is uuid — never insert fake strings like "receipt-2"
   const uuidRe =
@@ -361,6 +362,7 @@ export async function enqueueReceipt(
   const idempotencyScope = params.tableId || String(params.orderLabel);
 
   const checkoutTs = params.checkoutTs ?? Date.now();
+  const idempotencyKey = `receipt:${idempotencyScope}:${checkoutTs}`;
   const escpos = buildReceiptEscPos({
     items: params.items,
     total: params.total,
@@ -379,29 +381,24 @@ export async function enqueueReceipt(
     payload.globalSupplements = params.globalSupplements;
   }
 
-  const inserts = caissePrinters.map((caisse, index) => {
-    // Add index to idempotency key so each printer gets a unique job for the same receipt
-    const idempotencyKey = `receipt:${idempotencyScope}:${checkoutTs}:${index}`;
-    return {
+  const { data, error } = await supabase
+    .from("print_jobs")
+    .insert({
       table_id: tableIdForDb,
       job_type: "receipt",
       priority: PRIORITY_RECEIPT,
       printer_id: caisse.id,
       printer_name: caisse.name,
-      mac_address: caisse.mac_address!.trim(),
+      mac_address: mac,
       idempotency_key: idempotencyKey,
       status: "pending",
       attempt_count: 0,
       next_attempt_at: now,
       payload,
       updated_at: now,
-    };
-  });
-
-  const { data, error } = await supabase
-    .from("print_jobs")
-    .insert(inserts)
-    .select("id");
+    })
+    .select("id")
+    .maybeSingle();
 
   if (error) {
     if (error.code === "23505") {
@@ -410,11 +407,7 @@ export async function enqueueReceipt(
     console.error("[print_jobs] receipt enqueue error:", error.message);
     return { status: "error", message: error.message };
   }
-  
-  // Return the jobId of the first one just to satisfy the return type, 
-  // since the caller doesn't strictly depend on the jobId array.
-  const firstId = data && data.length > 0 ? (data[0].id as string) : "";
-  return { status: "enqueued", jobId: firstId };
+  return { status: "enqueued", jobId: (data?.id as string) ?? "" };
 }
 
 /** One-shot consol: re-route failed station payload to another kitchen printer. */
