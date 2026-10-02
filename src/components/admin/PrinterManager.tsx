@@ -377,18 +377,9 @@ export function PrinterManager() {
             type="button"
             onClick={async () => {
               try {
-                // #region agent log
-                fetch('http://127.0.0.1:7680/ingest/b490126b-dfa2-4a19-9733-3902cacf3768',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'c5e869'},body:JSON.stringify({sessionId:'c5e869',runId:'post-fix',hypothesisId:'J',location:'PrinterManager.tsx:claimHub',message:'claim_hub_click',data:{localDeviceId},timestamp:Date.now()})}).catch(()=>{});
-                // #endregion
                 await claimPrimaryHub();
-                // #region agent log
-                fetch('http://127.0.0.1:7680/ingest/b490126b-dfa2-4a19-9733-3902cacf3768',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'c5e869'},body:JSON.stringify({sessionId:'c5e869',runId:'post-fix',hypothesisId:'J',location:'PrinterManager.tsx:claimHub',message:'claim_hub_ok',data:{localDeviceId},timestamp:Date.now()})}).catch(()=>{});
-                // #endregion
                 toast.success("Cet appareil est maintenant le hub d'impression");
               } catch (err: any) {
-                // #region agent log
-                fetch('http://127.0.0.1:7680/ingest/b490126b-dfa2-4a19-9733-3902cacf3768',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'c5e869'},body:JSON.stringify({sessionId:'c5e869',runId:'post-fix',hypothesisId:'J',location:'PrinterManager.tsx:claimHub',message:'claim_hub_err',data:{err:String(err?.message??err)},timestamp:Date.now()})}).catch(()=>{});
-                // #endregion
                 toast.error("Impossible de définir le hub", { description: err.message });
               }
             }}

@@ -215,9 +215,6 @@ async function processJob(job: PrintJob): Promise<void> {
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
     console.error(`[PRINT DAEMON] Fail ${job.id}:`, message);
-    // #region agent log
-    fetch('http://127.0.0.1:7680/ingest/b490126b-dfa2-4a19-9733-3902cacf3768',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'c5e869'},body:JSON.stringify({sessionId:'c5e869',runId:'hub-injoignable',hypothesisId:'C',location:'printQueueDaemon.ts:fail',message:'daemon_job_fail',data:{jobId:job.id,jobType:job.job_type,printer:job.printer_name,attempts:job.attempts,err:message},timestamp:Date.now()})}).catch(()=>{});
-    // #endregion
     updatePrintActivity(activityId, { status: "error", detail: message });
     try {
       await hardSettleRadio(`job-fail:${job.printer_name}`);

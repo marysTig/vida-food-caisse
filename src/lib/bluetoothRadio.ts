@@ -48,25 +48,16 @@ export function nativeConnect(
 
     const onOk = (mode: "insecure" | "secure") => {
       btLog("SOCKET_OPEN_OK", `${label} · ${mode}`);
-      // #region agent log
-      fetch('http://127.0.0.1:7680/ingest/b490126b-dfa2-4a19-9733-3902cacf3768',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'c5e869'},body:JSON.stringify({sessionId:'c5e869',runId:'post-fix',hypothesisId:'H',location:'bluetoothRadio.ts:nativeConnect',message:'connect_ok',data:{label,mode},timestamp:Date.now()})}).catch(()=>{});
-      // #endregion
       resolve(mode);
     };
 
     const onErr = (mode: string, err: unknown) => {
       btLog("SOCKET_OPEN_ERR", `${label} · ${mode} · ${String(err)}`);
-      // #region agent log
-      fetch('http://127.0.0.1:7680/ingest/b490126b-dfa2-4a19-9733-3902cacf3768',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'c5e869'},body:JSON.stringify({sessionId:'c5e869',runId:'post-fix',hypothesisId:'H',location:'bluetoothRadio.ts:nativeConnect',message:'connect_err',data:{label,mode,err:String(err)},timestamp:Date.now()})}).catch(()=>{});
-      // #endregion
       reject(err instanceof Error ? err : new Error(String(err)));
     };
 
     if (typeof bs.connectInsecure === "function") {
       btLog("SOCKET_OPEN_INSECURE", `${label} · ${macAddress}`);
-      // #region agent log
-      fetch('http://127.0.0.1:7680/ingest/b490126b-dfa2-4a19-9733-3902cacf3768',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'c5e869'},body:JSON.stringify({sessionId:'c5e869',runId:'post-fix',hypothesisId:'H',location:'bluetoothRadio.ts:nativeConnect',message:'try_insecure_only',data:{label},timestamp:Date.now()})}).catch(()=>{});
-      // #endregion
       bs.connectInsecure(
         macAddress,
         () => onOk("insecure"),
@@ -154,9 +145,6 @@ export async function acquireProbeRadio(
   while (mode !== "idle") {
     if (Date.now() - started > maxWaitMs) {
       btLog("PROBE_DENIED", `radio busy (${mode}) · ${owner}`);
-      // #region agent log
-      fetch('http://127.0.0.1:7680/ingest/b490126b-dfa2-4a19-9733-3902cacf3768',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'c5e869'},body:JSON.stringify({sessionId:'c5e869',runId:'post-fix',hypothesisId:'A',location:'bluetoothRadio.ts:acquireProbeRadio',message:'probe_denied_busy',data:{owner,mode,waitedMs:Date.now()-started},timestamp:Date.now()})}).catch(()=>{});
-      // #endregion
       throw new Error(
         "Radio Bluetooth occupée (impression en cours). Réessayez dans un instant.",
       );
@@ -168,9 +156,6 @@ export async function acquireProbeRadio(
   const gen = receiptGeneration;
   mode = "receipt";
   btLog("PROBE_ACQUIRE", owner);
-  // #region agent log
-  fetch('http://127.0.0.1:7680/ingest/b490126b-dfa2-4a19-9733-3902cacf3768',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'c5e869'},body:JSON.stringify({sessionId:'c5e869',runId:'post-fix',hypothesisId:'A',location:'bluetoothRadio.ts:acquireProbeRadio',message:'probe_acquire_idle',data:{owner,waitedMs:Date.now()-started},timestamp:Date.now()})}).catch(()=>{});
-  // #endregion
 
   let released = false;
   return {
@@ -194,9 +179,6 @@ export async function acquireKitchenRadio(
 ): Promise<{ signal: AbortSignal; release: () => void }> {
   if (mode === "receipt") {
     btLog("KITCHEN_DENIED", `receipt owns radio · ${owner}`);
-    // #region agent log
-    fetch('http://127.0.0.1:7680/ingest/b490126b-dfa2-4a19-9733-3902cacf3768',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'c5e869'},body:JSON.stringify({sessionId:'c5e869',runId:'hub-injoignable',hypothesisId:'E',location:'bluetoothRadio.ts:acquireKitchenRadio',message:'kitchen_denied_receipt_owns',data:{owner},timestamp:Date.now()})}).catch(()=>{});
-    // #endregion
     throw new KitchenAbortedError();
   }
   // Wait briefly only if another kitchen session is releasing
@@ -242,9 +224,6 @@ export async function acquireReceiptRadio(owner: string): Promise<{
   while (mode === "receipt") {
     if (Date.now() - waitStart > 45_000) {
       btLog("RECEIPT_WAIT_TIMEOUT", owner);
-      // #region agent log
-      fetch('http://127.0.0.1:7680/ingest/b490126b-dfa2-4a19-9733-3902cacf3768',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'c5e869'},body:JSON.stringify({sessionId:'c5e869',runId:'post-fix',hypothesisId:'F',location:'bluetoothRadio.ts:acquireReceiptRadio',message:'receipt_wait_timeout',data:{owner,mode},timestamp:Date.now()})}).catch(()=>{});
-      // #endregion
       throw new Error("Radio Bluetooth occupée trop longtemps");
     }
     await sleep(100);
@@ -253,9 +232,6 @@ export async function acquireReceiptRadio(owner: string): Promise<{
   receiptGeneration += 1;
   const gen = receiptGeneration;
   btLog("RECEIPT_PREEMPT", owner);
-  // #region agent log
-  fetch('http://127.0.0.1:7680/ingest/b490126b-dfa2-4a19-9733-3902cacf3768',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'c5e869'},body:JSON.stringify({sessionId:'c5e869',runId:'post-fix',hypothesisId:'F',location:'bluetoothRadio.ts:acquireReceiptRadio',message:'receipt_acquire_serialized',data:{owner,preemptKitchen:!!kitchenSession,mode,waitedMs:Date.now()-waitStart},timestamp:Date.now()})}).catch(()=>{});
-  // #endregion
 
   const preemptedKitchen = !!kitchenSession;
   if (kitchenSession) {
