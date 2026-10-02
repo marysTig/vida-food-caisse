@@ -18,6 +18,7 @@ import { toast } from "sonner";
 import { useSessionStore } from "@/lib/authStore";
 import { recordZReport } from "@/lib/zReport";
 import { type GlobalSupplement } from "@/lib/globalSupplementsStore";
+import { playCashSound } from "@/lib/posSounds";
 
 export const Route = createFileRoute("/emporter")({
   head: () => ({
@@ -114,6 +115,8 @@ function EmporterPage() {
       toast.error("Erreur d'enregistrement du Rapport Z. Paiement non finalisé.", { duration: 7000 });
       return; // Aborting — order stays open
     }
+
+    playCashSound();
 
     clearOrder(checkoutTable.id);
     await updateTable(checkoutTable.id, {

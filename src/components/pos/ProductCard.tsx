@@ -17,7 +17,7 @@ export function ProductCard({ product, onSelect, readOnly = false }: ProductCard
   const inner = (
     <>
       <div className="relative flex justify-center pt-4 bg-transparent">
-        <div className="relative aspect-square w-24 h-24 sm:w-28 sm:h-28 overflow-hidden rounded-full bg-muted shadow-sm border border-border">
+        <div className="relative aspect-square w-24 h-24 sm:w-28 sm:h-28 overflow-hidden rounded-full bg-muted">
           {displayImage ? (
             <img
               src={displayImage}

@@ -23,6 +23,7 @@ import { ComponentLoader } from "@/components/ui/PageLoader";
 import { recordZReport } from "@/lib/zReport";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { useGlobalSupplementsStore, reloadGlobalSupplements, type GlobalSupplement } from "@/lib/globalSupplementsStore";
+import { playAddSound, playCashSound } from "@/lib/posSounds";
 
 type TableOrderSidebarProps = {
   tableId: string;
@@ -575,6 +576,7 @@ export function TableOrderSidebar({ tableId, tableNumber, mergedIds, onClose }: 
         { id: `${product.id}-${Date.now()}`, product, quantity: 1, supplements: [], selectedOption },
       ]);
     }
+    playAddSound();
   }, [orders, tableId, setOrder]);
 
   const handleProductSelect = useCallback((product: Product) => {
@@ -709,6 +711,8 @@ export function TableOrderSidebar({ tableId, tableNumber, mergedIds, onClose }: 
       toast.error("Erreur d'enregistrement du Rapport Z. Paiement non finalisé.", { duration: 7000 });
       return; // Aborting — table stays occupied
     }
+
+    playCashSound();
 
     // 1. Clear items + note
     clearOrder(tableId);
