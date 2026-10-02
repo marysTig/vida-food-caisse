@@ -21,6 +21,7 @@ import { UserLogin } from "@/components/auth/UserLogin";
 import { ComponentLoader } from "@/components/ui/PageLoader";
 import { recordZReport } from "@/lib/zReport";
 import { type GlobalSupplement } from "@/lib/globalSupplementsStore";
+import { playCashSound } from "@/lib/posSounds";
 
 export const Route = createFileRoute("/tables")({
   head: () => ({
@@ -469,6 +470,8 @@ function TablesPage() {
       setCheckoutTable(null);
       return;
     }
+
+    playCashSound();
 
     const checkoutTableId = checkoutTable.id;
     clearOrder(checkoutTable.id);
