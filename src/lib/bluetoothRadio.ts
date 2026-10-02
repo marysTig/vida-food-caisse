@@ -83,7 +83,52 @@ export function forceDisconnectNative(reason: string): Promise<void> {
 /** Full adapter shutdown + hard settle before next connect. */
 export async function hardSettleRadio(label: string): Promise<void> {
   await forceDisconnectNative(label);
+  btLog("SOCKET_SETTLE", `${label} · ${BT_HARD_SETTLE_MS}ms`);
+  await sleep(BT_HARD_SETTLE_MS);
   btLog("SOCKET_SETTLE_DONE", label);
+}
+
+/**
+ * Wait for idle radio, then take exclusive ownership for Admin probes.
+ * Never preempts kitchen or receipt — probes must not interrupt real jobs.
+ */
+export async function acquireProbeRadio(
+  owner: string,
+  maxWaitMs = 20_000,
+): Promise<{ release: () => void }> {
+  const started = Date.now();
+  while (mode !== "idle") {
+    if (Date.now() - started > maxWaitMs) {
+      btLog("PROBE_DENIED", `radio busy (${mode}) · ${owner}`);
+      // #region agent log
+      fetch('http://127.0.0.1:7680/ingest/b490126b-dfa2-4a19-9733-3902cacf3768',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'c5e869'},body:JSON.stringify({sessionId:'c5e869',runId:'post-fix',hypothesisId:'A',location:'bluetoothRadio.ts:acquireProbeRadio',message:'probe_denied_busy',data:{owner,mode,waitedMs:Date.now()-started},timestamp:Date.now()})}).catch(()=>{});
+      // #endregion
+      throw new Error(
+        "Radio Bluetooth occupée (impression en cours). Réessayez dans un instant.",
+      );
+    }
+    await sleep(150);
+  }
+
+  receiptGeneration += 1;
+  const gen = receiptGeneration;
+  mode = "receipt";
+  btLog("PROBE_ACQUIRE", owner);
+  // #region agent log
+  fetch('http://127.0.0.1:7680/ingest/b490126b-dfa2-4a19-9733-3902cacf3768',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'c5e869'},body:JSON.stringify({sessionId:'c5e869',runId:'post-fix',hypothesisId:'A',location:'bluetoothRadio.ts:acquireProbeRadio',message:'probe_acquire_idle',data:{owner,waitedMs:Date.now()-started},timestamp:Date.now()})}).catch(()=>{});
+  // #endregion
+
+  let released = false;
+  return {
+    release: () => {
+      if (released) return;
+      released = true;
+      if (receiptGeneration === gen && mode === "receipt") {
+        mode = "idle";
+        btLog("PROBE_RELEASE", owner);
+      }
+    },
+  };
 }
 
 /**

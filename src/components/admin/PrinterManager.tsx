@@ -88,11 +88,23 @@ export function PrinterManager() {
     }
   };
 
+  // Do NOT auto-probe on mount — probes used to steal receipt priority mid-print
+  // and mark every printer Injoignable while delaying kitchen/caisse jobs.
   useEffect(() => {
     if (loading || hubLoading || printers.length === 0) return;
-    void probeAll();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [loading, hubLoading, printers.map((p) => `${p.id}:${p.mac_address}`).join("|")]);
+    setReachability((prev) => {
+      const next = { ...prev };
+      for (const p of printers) {
+        if (!next[p.id]) {
+          next[p.id] = {
+            status: "unknown",
+            detail: "Appuyez sur Vérifier Bluetooth",
+          };
+        }
+      }
+      return next;
+    });
+  }, [loading, hubLoading, printers]);
 
   if (loading || hubLoading) return <ComponentLoader />;
 
