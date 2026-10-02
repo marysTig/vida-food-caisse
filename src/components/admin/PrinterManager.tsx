@@ -15,7 +15,7 @@ import {
 import { ComponentLoader } from "@/components/ui/PageLoader";
 
 type Reachability = {
-  status: "unknown" | "checking" | "ok" | "fail";
+  status: "unknown" | "checking" | "ok" | "fail" | "busy";
   detail: string;
 };
 
@@ -67,10 +67,13 @@ export function PrinterManager() {
       [printer.id]: { status: "checking", detail: "Test en cours…" },
     }));
     const result = await printerService.verifyPrinterReachable(printer);
+    const busy =
+      !result.ok &&
+      /occupée|occupee|en cours/i.test(result.detail);
     setReachability((prev) => ({
       ...prev,
       [printer.id]: {
-        status: result.ok ? "ok" : "fail",
+        status: result.ok ? "ok" : busy ? "busy" : "fail",
         detail: result.detail,
       },
     }));
@@ -565,6 +568,7 @@ export function PrinterManager() {
           };
           const isOk = reach.status === "ok";
           const isChecking = reach.status === "checking";
+          const isBusy = reach.status === "busy";
           const missingCats =
             (printer.type === "plaque" || printer.type === "four") &&
             (!printer.category_ids || printer.category_ids.length === 0);
@@ -592,7 +596,7 @@ export function PrinterManager() {
                 <div className="flex flex-col items-end gap-1">
                   <div className="flex items-center gap-2">
                     <span className="flex h-2 w-2 relative">
-                      {!isChecking && (
+                      {!isChecking && !isBusy && (
                         <span
                           className={`absolute inline-flex h-full w-full rounded-full opacity-75 ${
                             isOk ? "bg-success animate-ping" : "bg-destructive"
@@ -601,11 +605,13 @@ export function PrinterManager() {
                       )}
                       <span
                         className={`relative inline-flex rounded-full h-2 w-2 ${
-                          isChecking
+                          isChecking || isBusy
                             ? "bg-amber-500"
                             : isOk
                               ? "bg-success"
-                              : "bg-destructive"
+                              : reach.status === "unknown"
+                                ? "bg-muted-foreground"
+                                : "bg-destructive"
                         }`}
                       />
                     </span>
@@ -614,7 +620,9 @@ export function PrinterManager() {
                         ? "Vérif…"
                         : isOk
                           ? "Joignable"
-                          : reach.status === "unknown"
+                          : isBusy
+                            ? "Occupée"
+                            : reach.status === "unknown"
                             ? "Inconnu"
                             : "Injoignable"}
                     </span>

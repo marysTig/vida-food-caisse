@@ -196,6 +196,8 @@ async function processJob(job: PrintJob): Promise<void> {
       });
       await requeueInterruptedJob(job.id);
       console.log(`[PRINT DAEMON] Requeued interrupted kitchen ${job.id}`);
+      // Back off while Admin probe / receipt holds exclusive radio — avoid denial spin
+      await sleep(2000);
       return;
     }
 

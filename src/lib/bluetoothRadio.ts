@@ -175,16 +175,32 @@ export async function acquireKitchenRadio(
 
 /**
  * Preempt kitchen and take receipt ownership.
- * Never waits on kitchen completion — aborts + disconnects immediately.
+ * Never opens a second concurrent SPP session: if another exclusive holder
+ * (receipt or Admin probe) is active, wait for it to release first.
  */
 export async function acquireReceiptRadio(owner: string): Promise<{
   release: () => void;
 }> {
+  // CRITICAL: probes and receipts both use mode "receipt". Stealing mid-connect
+  // (bumping gen while SOCKET_OPEN is in flight) caused dual SPP → Unable to connect
+  // and false "Injoignable" on Admin.
+  const waitStart = Date.now();
+  while (mode === "receipt") {
+    if (Date.now() - waitStart > 45_000) {
+      btLog("RECEIPT_WAIT_TIMEOUT", owner);
+      // #region agent log
+      fetch('http://127.0.0.1:7680/ingest/b490126b-dfa2-4a19-9733-3902cacf3768',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'c5e869'},body:JSON.stringify({sessionId:'c5e869',runId:'post-fix',hypothesisId:'F',location:'bluetoothRadio.ts:acquireReceiptRadio',message:'receipt_wait_timeout',data:{owner,mode},timestamp:Date.now()})}).catch(()=>{});
+      // #endregion
+      throw new Error("Radio Bluetooth occupée trop longtemps");
+    }
+    await sleep(100);
+  }
+
   receiptGeneration += 1;
   const gen = receiptGeneration;
   btLog("RECEIPT_PREEMPT", owner);
   // #region agent log
-  fetch('http://127.0.0.1:7680/ingest/b490126b-dfa2-4a19-9733-3902cacf3768',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'c5e869'},body:JSON.stringify({sessionId:'c5e869',runId:'hub-injoignable',hypothesisId:'A',location:'bluetoothRadio.ts:acquireReceiptRadio',message:'receipt_preempt',data:{owner,isProbe:owner.startsWith('probe:'),preemptKitchen:!!kitchenSession,mode},timestamp:Date.now()})}).catch(()=>{});
+  fetch('http://127.0.0.1:7680/ingest/b490126b-dfa2-4a19-9733-3902cacf3768',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'c5e869'},body:JSON.stringify({sessionId:'c5e869',runId:'post-fix',hypothesisId:'F',location:'bluetoothRadio.ts:acquireReceiptRadio',message:'receipt_acquire_serialized',data:{owner,preemptKitchen:!!kitchenSession,mode,waitedMs:Date.now()-waitStart},timestamp:Date.now()})}).catch(()=>{});
   // #endregion
 
   const preemptedKitchen = !!kitchenSession;
