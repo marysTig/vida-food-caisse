@@ -18,6 +18,7 @@ import {
   buildReceiptEscPos,
   uint8ToBase64,
 } from "@/lib/escposTickets";
+import { agentDebugLog } from "@/lib/agentDebugLog";
 
 export const PRIORITY_RECEIPT = 100;
 export const PRIORITY_KITCHEN = 10;
@@ -209,12 +210,30 @@ export async function enqueueKitchenStations(
     items: items.length,
     delta: delta.length,
     kitchenPrinters: kitchenPrinters.length,
+    printersTotal: printers.length,
+    enabledFlags: printers.map((p) => `${p.name}:${p.type}:${p.enabled}`),
   });
+  // #region agent log
+  agentDebugLog(
+    "kitchenPrintQueue.ts:enqueueKitchenStations",
+    "kitchen_enqueue_precheck",
+    {
+      items: items.length,
+      delta: delta.length,
+      kitchenPrinters: kitchenPrinters.length,
+      enabledFlags: printers.map((p) => `${p.name}:${p.type}:${p.enabled}`),
+    },
+    "H-printers-disabled",
+  );
+  // #endregion
   if (delta.length === 0) {
     return { status: "noop", reason: "empty_delta" };
   }
 
   if (kitchenPrinters.length === 0) {
+    console.error("[KITCHEN ENQUEUE] blocked: no enabled kitchen printers", {
+      printers: printers.map((p) => `${p.name}:${p.type}:${p.enabled}`),
+    });
     return {
       status: "error",
       message: "Aucune imprimante cuisine (plaque/four) activée.",
