@@ -16,6 +16,7 @@ import {
 import { base64ToUint8 } from "@/lib/escposTickets";
 import {
   INTER_PRINTER_GAP_MS,
+  RECEIPT_MAC_COOLDOWN_MS,
   claimNextPrintJob,
   enqueueConsolKitchenJob,
   hasPendingReceiptJob,
@@ -30,9 +31,6 @@ import { getPrintersFromStore } from "@/lib/printerStore";
 import { getLocalPrintDeviceId } from "@/lib/printDevice";
 import { isLocalDevicePrimaryHub } from "@/lib/printSettingsStore";
 import { logPrintActivity, updatePrintActivity } from "@/lib/printActivityLog";
-
-/** Fail-fast connect+write budget (plan: 2s). */
-const JOB_TIMEOUT_MS = 2000;
 
 let lastSuccessMac: string | null = null;
 let draining = false;
@@ -57,12 +55,28 @@ export function wakePrintQueueDaemon() {
   })();
 }
 
-async function waitInterPrinterGap(nextMac: string): Promise<void> {
-  if (!lastSuccessMac || lastSuccessMac === nextMac) return;
+async function waitInterPrinterGap(nextMac: string, jobType?: string): Promise<number> {
+  // Caisse: skip full 4s gap, no extra cooldown needed because previous disconnect callback already resolved
+  if (jobType === "receipt") {
+    return 0;
+  }
+
+  if (!lastSuccessMac || lastSuccessMac === nextMac) {
+    return 0;
+  }
   console.log(
     `[PRINT DAEMON] Inter-printer gap ${INTER_PRINTER_GAP_MS}ms (${lastSuccessMac} → ${nextMac})`,
   );
-  await sleep(INTER_PRINTER_GAP_MS);
+
+  // Interruptible: if a receipt arrives mid-gap, abort kitchen so caisse runs now
+  const deadline = Date.now() + INTER_PRINTER_GAP_MS;
+  while (Date.now() < deadline) {
+    if (kitchenAbort?.signal.aborted || (await hasPendingReceiptJob())) {
+      throw new KitchenAbortedError();
+    }
+    await sleep(Math.min(250, deadline - Date.now()));
+  }
+  return INTER_PRINTER_GAP_MS;
 }
 
 async function sendJobBytes(job: PrintJob, data: Uint8Array): Promise<"ok" | "aborted"> {
@@ -70,34 +84,30 @@ async function sendJobBytes(job: PrintJob, data: Uint8Array): Promise<"ok" | "ab
   const name = job.printer_name ?? "imprimante";
   if (!mac) throw new Error("Adresse MAC manquante");
 
-  await waitInterPrinterGap(mac);
+  try {
+    await waitInterPrinterGap(mac, job.job_type);
+  } catch (err) {
+    if (err instanceof KitchenAbortedError) return "aborted";
+    throw err;
+  }
 
   if (job.job_type === "receipt") {
     const { release } = await acquireReceiptRadio(`daemon-receipt:${job.id}`);
-    const timedOut = { current: false };
     try {
-      await Promise.race([
-        nativeSendEscPos({
-          priority: "receipt",
-          printerName: name,
-          macAddress: mac,
-          data,
-          skipPreSettle: true,
-        }),
-        sleep(JOB_TIMEOUT_MS).then(async () => {
-          timedOut.current = true;
-          await forceDisconnectNative(`timeout-receipt:${name}`);
-          throw new Error(`Délai ${JOB_TIMEOUT_MS}ms dépassé (${name})`);
-        }),
-      ]);
-      if (timedOut.current) {
-        throw new Error(`Délai ${JOB_TIMEOUT_MS}ms dépassé (${name})`);
-      }
+      // Momentary caisse: skip trailing settle (acquire already settled once)
+      await nativeSendEscPos({
+        priority: "receipt",
+        printerName: name,
+        macAddress: mac,
+        data,
+        skipPreSettle: true,
+        skipPostSettle: true,
+      });
       lastSuccessMac = mac;
       return "ok";
     } finally {
       release();
-      await hardSettleRadio(`post-receipt:${name}`);
+      // No second hardSettle — native disconnect already closed the socket
     }
   }
 
@@ -105,10 +115,21 @@ async function sendJobBytes(job: PrintJob, data: Uint8Array): Promise<"ok" | "ab
   const ac = new AbortController();
   kitchenAbort = ac;
   currentKitchenJobId = job.id;
-  const { signal, release } = await acquireKitchenRadio(`daemon-kitchen:${job.id}`);
+
+  let signal: AbortSignal;
+  let release: () => void;
+  try {
+    const session = await acquireKitchenRadio(`daemon-kitchen:${job.id}`);
+    signal = session.signal;
+    release = session.release;
+  } catch (err) {
+    kitchenAbort = null;
+    currentKitchenJobId = null;
+    if (err instanceof KitchenAbortedError) return "aborted";
+    throw err;
+  }
 
   const combined = new AbortController();
-  let timedOut = false;
   const forward = () => {
     if (!combined.signal.aborted) combined.abort();
     void forceDisconnectNative(`kitchen-abort:${name}`);
@@ -120,32 +141,20 @@ async function sendJobBytes(job: PrintJob, data: Uint8Array): Promise<"ok" | "ab
     if (await hasPendingReceiptJob()) {
       throw new KitchenAbortedError();
     }
-    await Promise.race([
-      nativeSendEscPos({
-        priority: "kitchen",
-        signal: combined.signal,
-        printerName: name,
-        macAddress: mac,
-        data,
-      }),
-      sleep(JOB_TIMEOUT_MS).then(async () => {
-        timedOut = true;
-        forward();
-        throw new Error(`Délai ${JOB_TIMEOUT_MS}ms dépassé (${name})`);
-      }),
-    ]);
+    await nativeSendEscPos({
+      priority: "kitchen",
+      signal: combined.signal,
+      printerName: name,
+      macAddress: mac,
+      data,
+    });
     lastSuccessMac = mac;
     return "ok";
   } catch (err) {
-    if (timedOut) {
-      throw err instanceof Error
-        ? err
-        : new Error(`Délai ${JOB_TIMEOUT_MS}ms dépassé (${name})`);
-    }
     if (
       err instanceof KitchenAbortedError ||
       ac.signal.aborted ||
-      (combined.signal.aborted && !timedOut)
+      combined.signal.aborted
     ) {
       return "aborted";
     }

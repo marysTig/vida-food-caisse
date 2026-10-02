@@ -5,6 +5,9 @@
  */
 
 export const BT_HARD_SETTLE_MS = 1500;
+/** Extra cool-down after aborting a kitchen connect before opening caisse. */
+export const BT_RECEIPT_PREEMPT_EXTRA_MS = 1000;
+/** Connect+write budget after settle (sole timeout owner for daemon jobs). */
 export const BT_OP_TIMEOUT_MS = 8000;
 export const BT_PRE_DISCONNECT_DRAIN_MS = 350;
 /** Max wait for disconnect callback before continuing settle. */
@@ -135,6 +138,7 @@ export async function acquireReceiptRadio(owner: string): Promise<{
   const gen = receiptGeneration;
   btLog("RECEIPT_PREEMPT", owner);
 
+  const preemptedKitchen = !!kitchenSession;
   if (kitchenSession) {
     btLog("KITCHEN_ABORT", `preempted by receipt · ${owner}`);
     kitchenSession.abortController.abort();
@@ -147,8 +151,12 @@ export async function acquireReceiptRadio(owner: string): Promise<{
   }
 
   mode = "receipt";
-  // Single hard settle here — nativeSendEscPos skips pre-settle when skipPreSettle
-  await hardSettleRadio(`receipt-preempt:${owner}`);
+  // Only hard settle if we just violently preempted a hung kitchen connect
+  if (preemptedKitchen) {
+    await hardSettleRadio(`receipt-preempt:${owner}`);
+    btLog("RECEIPT_PREEMPT_EXTRA", `${BT_RECEIPT_PREEMPT_EXTRA_MS}ms`);
+    await sleep(BT_RECEIPT_PREEMPT_EXTRA_MS);
+  }
 
   let released = false;
   return {
@@ -171,6 +179,8 @@ export type NativeSendOptions = {
   data: Uint8Array;
   /** When true, skip the opening hardSettle (caller already settled). */
   skipPreSettle?: boolean;
+  /** When true, resolve right after disconnect (no trailing 1.5s settle). */
+  skipPostSettle?: boolean;
 };
 
 /**
@@ -178,7 +188,8 @@ export type NativeSendOptions = {
  * Kitchen ops honor AbortSignal (receipt preempt).
  */
 export async function nativeSendEscPos(opts: NativeSendOptions): Promise<void> {
-  const { printerName, macAddress, data, signal, skipPreSettle } = opts;
+  const { printerName, macAddress, data, signal, skipPreSettle, skipPostSettle } =
+    opts;
 
   const throwIfAborted = () => {
     if (signal?.aborted) {
@@ -284,6 +295,11 @@ export async function nativeSendEscPos(opts: NativeSendOptions): Promise<void> {
                 await forceDisconnectNative(`after-write:${printerName}`);
                 if (settled) return;
                 finish(() => {
+                  if (skipPostSettle) {
+                    btLog("SOCKET_SETTLE_SKIP", printerName);
+                    resolve();
+                    return;
+                  }
                   void sleep(BT_HARD_SETTLE_MS).then(() => {
                     btLog(
                       "SOCKET_SETTLE_DONE",

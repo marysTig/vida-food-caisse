@@ -31,6 +31,7 @@ export async function runCashierReceiptPrint(params: {
     itemCount: items.length,
     total,
     label,
+    tableId: params.tableId ?? null,
   });
 
   const cashierPrinters = params.printers.filter(
@@ -56,12 +57,11 @@ export async function runCashierReceiptPrint(params: {
     return { attempted: 1, succeeded: 0, errors: [msg] };
   }
 
-  const tableId =
-    params.tableId ??
-    `receipt-${typeof label === "string" || typeof label === "number" ? label : "x"}`;
+  // Prefer real table UUID; otherwise a non-uuid scope (DB column stays null)
+  const tableId = params.tableId?.trim() || `anon:${Date.now()}`;
 
   const result = await enqueueReceipt({
-    tableId: String(tableId),
+    tableId,
     orderLabel: label,
     items,
     total,
