@@ -9,9 +9,7 @@ import {
   nativeConnect,
   nativeSendEscPos,
   getRadioMode,
-  forceDisconnectNative,
   hardSettleRadio,
-  BT_HARD_SETTLE_MS,
   BT_OP_TIMEOUT_MS,
 } from "@/lib/bluetoothRadio";
 import { openCircuit } from "@/lib/kitchenCircuitBreaker";
