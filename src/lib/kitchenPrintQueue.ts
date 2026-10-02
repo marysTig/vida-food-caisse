@@ -116,24 +116,12 @@ function lineCategoryId(item: CartItem): string | undefined {
 }
 
 async function sha256Hex(input: string): Promise<string> {
-  // Prefer Web Crypto, but never hang the print pipeline if subtle.digest stalls
-  // (seen on some Android WebViews under load).
-  try {
-    if (typeof crypto !== "undefined" && crypto.subtle) {
-      const digestPromise = crypto.subtle.digest(
-        "SHA-256",
-        new TextEncoder().encode(input),
-      );
-      const timeoutPromise = new Promise<never>((_, reject) => {
-        setTimeout(() => reject(new Error("sha256-timeout")), 2000);
-      });
-      const hash = await Promise.race([digestPromise, timeoutPromise]);
-      return Array.from(new Uint8Array(hash))
-        .map((b) => b.toString(16).padStart(2, "0"))
-        .join("");
-    }
-  } catch {
-    /* fall through to sync hash */
+  const data = new TextEncoder().encode(input);
+  if (typeof crypto !== "undefined" && crypto.subtle) {
+    const hash = await crypto.subtle.digest("SHA-256", data);
+    return Array.from(new Uint8Array(hash))
+      .map((b) => b.toString(16).padStart(2, "0"))
+      .join("");
   }
   let h = 0;
   for (let i = 0; i < input.length; i++) {
@@ -250,7 +238,6 @@ export async function enqueueKitchenStations(
   }
 
   const baseKey = await buildIdempotencyKey(params.tableId, delta);
-  console.log("[KITCHEN ENQUEUE] stations", stations.length, "key", baseKey.slice(0, 12));
   const now = new Date().toISOString();
   const jobIds: string[] = [];
   let skippedNoMac = 0;
@@ -260,7 +247,7 @@ export async function enqueueKitchenStations(
     const mac = (printer?.mac_address ?? "").trim();
     if (!printer || !mac) {
       skippedNoMac += 1;
-      console.warn("[KITCHEN ENQUEUE] skip station without MAC", station.printerName);
+      console.warn("[KITCHEN ENQUEUE] skip no MAC", station.printerName);
       continue;
     }
 
@@ -304,24 +291,11 @@ export async function enqueueKitchenStations(
     };
 
     console.log("[KITCHEN ENQUEUE] insert", printer.name);
-    const insertPromise = supabase
+    const { data, error } = await supabase
       .from("print_jobs")
       .insert(row)
       .select("id")
       .maybeSingle();
-    const timeoutPromise = new Promise<{ data: null; error: { message: string; code?: string } }>(
-      (resolve) => {
-        setTimeout(
-          () =>
-            resolve({
-              data: null,
-              error: { message: "Timeout insertion print_jobs (15s)" },
-            }),
-          15_000,
-        );
-      },
-    );
-    const { data, error } = await Promise.race([insertPromise, timeoutPromise]);
 
     if (error) {
       if (error.code === "23505") {
@@ -367,7 +341,6 @@ export async function enqueueKitchenStations(
           "Imprimante(s) cuisine sans adresse MAC — associez-les dans Admin → Imprimantes.",
       };
     }
-    console.log("[KITCHEN ENQUEUE] noop duplicate");
     return { status: "noop", reason: "duplicate" };
   }
   console.log("[KITCHEN ENQUEUE] ok", jobIds);
@@ -435,7 +408,7 @@ export async function enqueueReceipt(
   }
 
   console.log("[print_jobs] receipt insert…");
-  const insertPromise = supabase
+  const { data, error } = await supabase
     .from("print_jobs")
     .insert({
       table_id: tableIdForDb,
@@ -453,20 +426,6 @@ export async function enqueueReceipt(
     })
     .select("id")
     .maybeSingle();
-  const timeoutPromise = new Promise<{
-    data: null;
-    error: { message: string; code?: string };
-  }>((resolve) => {
-    setTimeout(
-      () =>
-        resolve({
-          data: null,
-          error: { message: "Timeout insertion ticket caisse (15s)" },
-        }),
-      15_000,
-    );
-  });
-  const { data, error } = await Promise.race([insertPromise, timeoutPromise]);
 
   if (error) {
     if (error.code === "23505") {
