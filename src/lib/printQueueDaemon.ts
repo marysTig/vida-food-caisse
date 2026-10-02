@@ -10,6 +10,7 @@ import {
   acquireReceiptRadio,
   forceDisconnectNative,
   hardSettleRadio,
+  markRadioNeedsSettle,
   nativeSendEscPos,
   sleep,
 } from "@/lib/bluetoothRadio";
@@ -23,6 +24,7 @@ import {
   reclaimStalePrintingJobs,
   requeueInterruptedJob,
   schedulePrintJobRetry,
+  RECEIPT_RETRY_BACKOFF_MS,
   type PrintJob,
 } from "@/lib/kitchenPrintQueue";
 import { getPrintersFromStore } from "@/lib/printerStore";
@@ -48,6 +50,7 @@ export function wakePrintQueueDaemon() {
     if (!currentKitchenJobId || !kitchenAbort) return;
     if (await hasPendingReceiptJob()) {
       console.log("[PRINT DAEMON] Receipt pending — aborting kitchen job", currentKitchenJobId);
+      markRadioNeedsSettle(`wake-abort:${currentKitchenJobId}`);
       kitchenAbort.abort();
     }
   })();
@@ -243,7 +246,14 @@ async function processJob(job: PrintJob): Promise<void> {
     }
 
     const nextAttempt = (job.attempt_count ?? 0) + 1;
-    const outcome = await schedulePrintJobRetry(job.id, nextAttempt, message);
+    const backoff =
+      job.job_type === "receipt" ? RECEIPT_RETRY_BACKOFF_MS : undefined;
+    const outcome = await schedulePrintJobRetry(
+      job.id,
+      nextAttempt,
+      message,
+      backoff,
+    );
     if (outcome === "needs_manual") {
       toast.error("Ticket non imprimé", {
         description: `${job.printer_name ?? "Imprimante"}: ${message}`,

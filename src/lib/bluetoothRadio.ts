@@ -7,6 +7,8 @@
 export const BT_HARD_SETTLE_MS = 1500;
 /** Extra cool-down after aborting a kitchen connect before opening caisse. */
 export const BT_RECEIPT_PREEMPT_EXTRA_MS = 1000;
+/** Short settle when radio was just used/aborted (avoids Device connection was lost). */
+export const BT_RECEIPT_QUICK_SETTLE_MS = 500;
 /** Connect+write budget after settle (must cover native SPP + channel-1 fallback). */
 export const BT_OP_TIMEOUT_MS = 20000;
 export const BT_PRE_DISCONNECT_DRAIN_MS = 350;
@@ -83,26 +85,16 @@ type KitchenSession = {
 let mode: RadioMode = "idle";
 let kitchenSession: KitchenSession | null = null;
 let receiptGeneration = 0;
-/** Caisse SPP kept open after receipt so next Encaisser skips ~2s reconnect. */
-let heldReceiptMac: string | null = null;
+/**
+ * Set when kitchen aborts / disconnects so the next caisse connect settles first.
+ * Without this, skipPreSettle + immediate connect → "Device connection was lost"
+ * (logcat 21:49:05 after kitchen abort at 21:49:00).
+ */
+let radioNeedsSettle = false;
 
-function nativeIsConnected(): Promise<boolean> {
-  return new Promise((resolve) => {
-    const bs =
-      typeof window !== "undefined" ? window.bluetoothSerial : undefined;
-    if (!bs || typeof bs.isConnected !== "function") {
-      resolve(false);
-      return;
-    }
-    try {
-      bs.isConnected(
-        () => resolve(true),
-        () => resolve(false),
-      );
-    } catch {
-      resolve(false);
-    }
-  });
+export function markRadioNeedsSettle(reason: string): void {
+  radioNeedsSettle = true;
+  btLog("RADIO_DIRTY", reason);
 }
 
 export function getRadioMode(): RadioMode {
@@ -116,7 +108,16 @@ export function isKitchenAborted(signal?: AbortSignal): boolean {
 /** Force native disconnect; resolves after plugin callback or cap. */
 export function forceDisconnectNative(reason: string): Promise<void> {
   return new Promise((resolve) => {
-    heldReceiptMac = null;
+    if (reason.includes("after-write")) {
+      // Clean close after a successful print — radio is settled.
+      radioNeedsSettle = false;
+    } else if (
+      reason.includes("abort") ||
+      reason.includes("kitchen") ||
+      reason.includes("pre-connect")
+    ) {
+      radioNeedsSettle = true;
+    }
     if (typeof window === "undefined" || !window.bluetoothSerial) {
       resolve();
       return;
@@ -268,17 +269,28 @@ export async function acquireReceiptRadio(owner: string): Promise<{
   }
 
   mode = "receipt";
-  // Only hard settle if we just violently preempted a hung kitchen connect
+  // Settle when we preempted kitchen OR radio is dirty from a prior abort
+  // (kitchenAbort releases session before acquire → preemptedKitchen false,
+  // but connect without settle → Device connection was lost @ 21:49:05).
   let settleMs = 0;
-  if (preemptedKitchen) {
+  const needsSettle = preemptedKitchen || radioNeedsSettle;
+  if (needsSettle) {
     const tSettle = Date.now();
-    await hardSettleRadio(`receipt-preempt:${owner}`);
-    btLog("RECEIPT_PREEMPT_EXTRA", `${BT_RECEIPT_PREEMPT_EXTRA_MS}ms`);
-    await sleep(BT_RECEIPT_PREEMPT_EXTRA_MS);
+    if (preemptedKitchen) {
+      await hardSettleRadio(`receipt-preempt:${owner}`);
+      btLog("RECEIPT_PREEMPT_EXTRA", `${BT_RECEIPT_PREEMPT_EXTRA_MS}ms`);
+      await sleep(BT_RECEIPT_PREEMPT_EXTRA_MS);
+    } else {
+      await forceDisconnectNative(`receipt-dirty:${owner}`);
+      btLog("RECEIPT_QUICK_SETTLE", `${BT_RECEIPT_QUICK_SETTLE_MS}ms`);
+      await sleep(BT_RECEIPT_QUICK_SETTLE_MS);
+    }
+    radioNeedsSettle = false;
     settleMs = Date.now() - tSettle;
   }
   // #region agent log
-  fetch('http://127.0.0.1:7680/ingest/b490126b-dfa2-4a19-9733-3902cacf3768',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'c5e869'},body:JSON.stringify({sessionId:'c5e869',runId:'caisse-latency',hypothesisId:'B',location:'bluetoothRadio.ts:acquireReceiptRadio',message:'receipt_acquire_done',data:{owner,waitedMs:Date.now()-waitStart-settleMs,preemptedKitchen,settleMs,totalAcquireMs:Date.now()-waitStart},timestamp:Date.now()})}).catch(()=>{});
+  console.log(`[CAISSE LATENCY] acquire_done · preemptedKitchen=${preemptedKitchen} · needsSettle=${needsSettle} · settleMs=${settleMs}`);
+  fetch('http://127.0.0.1:7680/ingest/b490126b-dfa2-4a19-9733-3902cacf3768',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'c5e869'},body:JSON.stringify({sessionId:'c5e869',runId:'caisse-latency',hypothesisId:'B',location:'bluetoothRadio.ts:acquireReceiptRadio',message:'receipt_acquire_done',data:{owner,waitedMs:Date.now()-waitStart-settleMs,preemptedKitchen,needsSettle,settleMs,totalAcquireMs:Date.now()-waitStart},timestamp:Date.now()})}).catch(()=>{});
   // #endregion
 
   let released = false;
@@ -321,50 +333,9 @@ export async function nativeSendEscPos(opts: NativeSendOptions): Promise<void> {
   };
 
   throwIfAborted();
-
-  // Warm caisse socket: skip reconnect when still held on the same MAC.
-  if (skipPreSettle && skipPostSettle) {
-    const warm =
-      heldReceiptMac === macAddress && (await nativeIsConnected());
-    if (warm) {
-      btLog("SOCKET_REUSE_WARM", printerName);
-      // #region agent log
-      console.log(`[CAISSE LATENCY] reuse_warm · ${printerName}`);
-      fetch('http://127.0.0.1:7680/ingest/b490126b-dfa2-4a19-9733-3902cacf3768',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'c5e869'},body:JSON.stringify({sessionId:'c5e869',runId:'caisse-latency',hypothesisId:'E',location:'bluetoothRadio.ts:nativeSendEscPos',message:'receipt_reuse_warm',data:{printerName,mac:macAddress.slice(-5)},timestamp:Date.now()})}).catch(()=>{});
-      // #endregion
-      await new Promise<void>((resolve, reject) => {
-        const writePayload = data.buffer.slice(
-          data.byteOffset,
-          data.byteOffset + data.byteLength,
-        );
-        console.log(`[SEND START] ${printerName}`);
-        window.bluetoothSerial.write(
-          writePayload,
-          () => {
-            console.log(`[SEND COMPLETE] ${printerName}`);
-            btLog("SOCKET_WRITE_OK", `${printerName} · bytes=${data.byteLength} · warm`);
-            resolve();
-          },
-          (err: unknown) => {
-            heldReceiptMac = null;
-            btLog("SOCKET_WRITE_ERR", `${printerName} · warm · ${String(err)}`);
-            void forceDisconnectNative(`warm-write-err:${printerName}`).then(() =>
-              reject(new Error("Erreur écriture: " + err)),
-            );
-          },
-        );
-      });
-      return;
-    }
-  }
-
   if (!skipPreSettle) {
     await hardSettleRadio(`pre-connect:${printerName}`);
   } else {
-    // Leaving a different warm MAC — drop it before connecting caisse.
-    if (heldReceiptMac && heldReceiptMac !== macAddress) {
-      await forceDisconnectNative(`switch-mac:${printerName}`);
-    }
     btLog("SOCKET_PRESETTLE_SKIP", printerName);
   }
   throwIfAborted();
@@ -460,16 +431,8 @@ export async function nativeSendEscPos(opts: NativeSendOptions): Promise<void> {
                   onAbort();
                   return;
                 }
-                if (skipPostSettle) {
-                  // Keep caisse SPP open — next Encaisser reuses it (no ~2s reconnect).
-                  heldReceiptMac = macAddress;
-                  finish(() => {
-                    btLog("SOCKET_KEEP_WARM", printerName);
-                    resolve();
-                  });
-                  return;
-                }
-                // Explicit close: await disconnect callback before settle/resolve
+                // Always disconnect — keep-warm caused "Device connection was lost"
+                // on the next connect/probe (logcat 21:49:05 / 21:50:23).
                 console.log(`[DISCONNECT START] ${printerName}`);
                 btLog("SOCKET_CLOSE", `${printerName} · after-write-flush`);
                 await forceDisconnectNative(`after-write:${printerName}`);

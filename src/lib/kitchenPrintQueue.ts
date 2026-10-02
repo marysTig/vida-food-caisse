@@ -24,6 +24,8 @@ export const PRIORITY_KITCHEN = 10;
 export const MAX_PRINT_ATTEMPTS = 3;
 /** Longer backoff after failures so RFCOMM can settle (was 2.5s → thrash). */
 export const RETRY_BACKOFF_MS = 8000;
+/** Fast retry for caisse — 8s kitchen backoff made first fail feel like "didn't print". */
+export const RECEIPT_RETRY_BACKOFF_MS = 800;
 export const INTER_PRINTER_GAP_MS = 4000;
 /** Short cool-down when caisse switches MAC (not the full 4s kitchen gap). */
 export const RECEIPT_MAC_COOLDOWN_MS = 1500;
@@ -570,6 +572,7 @@ export async function schedulePrintJobRetry(
   jobId: string,
   attemptCount: number,
   message: string,
+  backoffMs: number = RETRY_BACKOFF_MS,
 ): Promise<"pending" | "needs_manual"> {
   const now = new Date();
   if (attemptCount >= MAX_PRINT_ATTEMPTS) {
@@ -590,7 +593,7 @@ export async function schedulePrintJobRetry(
     .update({
       status: "pending",
       attempt_count: attemptCount,
-      next_attempt_at: new Date(now.getTime() + RETRY_BACKOFF_MS).toISOString(),
+      next_attempt_at: new Date(now.getTime() + backoffMs).toISOString(),
       error: message,
       claimed_by_device_id: null,
       updated_at: now.toISOString(),
