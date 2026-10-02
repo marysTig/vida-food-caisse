@@ -345,11 +345,14 @@ export async function enqueueReceipt(
   params: EnqueueReceiptParams,
 ): Promise<EnqueueReceiptResult> {
   const printers = params.printers ?? getPrintersFromStore();
-  const caisse = printers.find((p) => p.enabled && p.type === "caisse");
-  const mac = (caisse?.mac_address ?? "").trim();
-  if (!caisse || !mac) {
+  const caisse = printers.find(
+    (p) => p.enabled && p.type === "caisse" && (p.mac_address || "").trim() !== "",
+  );
+  if (!caisse) {
     return { status: "noop", reason: "no_printer" };
   }
+
+  const mac = caisse.mac_address!.trim();
 
   // table_id column is uuid — never insert fake strings like "receipt-2"
   const uuidRe =

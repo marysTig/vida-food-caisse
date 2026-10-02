@@ -151,10 +151,9 @@ export async function acquireReceiptRadio(owner: string): Promise<{
   }
 
   mode = "receipt";
-  // Single hard settle here — nativeSendEscPos skips pre-settle when skipPreSettle
-  await hardSettleRadio(`receipt-preempt:${owner}`);
-  // Hung kitchen connect leaves the adapter dirty — extra cool-down before caisse open
+  // Only hard settle if we just violently preempted a hung kitchen connect
   if (preemptedKitchen) {
+    await hardSettleRadio(`receipt-preempt:${owner}`);
     btLog("RECEIPT_PREEMPT_EXTRA", `${BT_RECEIPT_PREEMPT_EXTRA_MS}ms`);
     await sleep(BT_RECEIPT_PREEMPT_EXTRA_MS);
   }

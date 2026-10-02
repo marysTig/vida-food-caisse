@@ -16,7 +16,6 @@ import {
 import { base64ToUint8 } from "@/lib/escposTickets";
 import {
   INTER_PRINTER_GAP_MS,
-  RECEIPT_MAC_COOLDOWN_MS,
   claimNextPrintJob,
   enqueueConsolKitchenJob,
   hasPendingReceiptJob,
@@ -56,12 +55,8 @@ export function wakePrintQueueDaemon() {
 }
 
 async function waitInterPrinterGap(nextMac: string, jobType?: string): Promise<number> {
-  // Caisse: skip full 4s gap, but cool down briefly when switching MAC after kitchen
+  // Caisse: skip full 4s gap, no extra cooldown needed because previous disconnect callback already resolved
   if (jobType === "receipt") {
-    if (lastSuccessMac && lastSuccessMac !== nextMac) {
-      await sleep(RECEIPT_MAC_COOLDOWN_MS);
-      return RECEIPT_MAC_COOLDOWN_MS;
-    }
     return 0;
   }
 
@@ -296,7 +291,10 @@ export function startPrintQueueDaemon(): () => void {
     console.log("[PRINT DAEMON] Started");
     while (!stopped) {
       if (!isLocalDevicePrimaryHub()) {
-        await waitForWake(3000);
+        // Poll frequently so the daemon wakes promptly once the printSettingsStore
+        // finishes its async Supabase fetch and marks this device as primary hub.
+        // A 3s sleep here caused up to ~3s delay on the first cashier receipt.
+        await waitForWake(200);
         continue;
       }
       if (typeof window === "undefined" || !window.bluetoothSerial) {
