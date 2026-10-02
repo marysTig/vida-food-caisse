@@ -108,16 +108,15 @@ export function isKitchenAborted(signal?: AbortSignal): boolean {
 /** Force native disconnect; resolves after plugin callback or cap. */
 export function forceDisconnectNative(reason: string): Promise<void> {
   return new Promise((resolve) => {
-    // Any real socket teardown leaves RFCOMM dirty until hardSettle.
-    // Clearing dirty on after-write caused caisse SOCKET_PRESETTLE_SKIP →
-    // 20s SOCKET_TIMEOUT then Unable to connect (logcat c5a66150 ~22:38:47).
+    // Abort / error / kitchen teardown → next connect must settle.
+    // Receipt success calls markRadioClean after disconnect (same-MAC fast path).
     if (
       reason.includes("abort") ||
-      reason.includes("after-write") ||
       reason.includes("timeout") ||
       reason.includes("open-err") ||
       reason.includes("write-err") ||
-      reason.includes("job-fail")
+      reason.includes("job-fail") ||
+      reason.includes("after-write")
     ) {
       radioNeedsSettle = true;
     }
@@ -156,8 +155,16 @@ export async function hardSettleRadio(label: string): Promise<void> {
   await forceDisconnectNative(label);
   btLog("SOCKET_SETTLE", `${label} · ${BT_HARD_SETTLE_MS}ms`);
   await sleep(BT_HARD_SETTLE_MS);
-  radioNeedsSettle = false;
+  // Do NOT clear radioNeedsSettle here — logcat showed RADIO_DIRTY then
+  // needsSettle=false after hardSettle, so caisse skipped settle and hung 20s.
+  // Cleared only after a successful write (markRadioClean).
   btLog("SOCKET_SETTLE_DONE", label);
+}
+
+/** Call after a successful connect+write — radio is proven healthy. */
+export function markRadioClean(reason: string): void {
+  radioNeedsSettle = false;
+  btLog("RADIO_CLEAN", reason);
 }
 
 /**
@@ -439,6 +446,10 @@ export async function nativeSendEscPos(opts: NativeSendOptions): Promise<void> {
                 btLog("SOCKET_CLOSE", `${printerName} · after-write-flush`);
                 await forceDisconnectNative(`after-write:${printerName}`);
                 console.log(`[DISCONNECTED] ${printerName}`);
+                // Kitchen → other MAC must settle; receipt may mark clean in daemon.
+                if (opts.priority === "receipt") {
+                  markRadioClean(`receipt-ok:${printerName}`);
+                }
                 if (settled) return;
                 finish(() => {
                   btLog("SOCKET_SETTLE_DONE", printerName);

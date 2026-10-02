@@ -5,6 +5,7 @@
 
 import { printerService } from "@/lib/printerService";
 import { getPrintersFromStore, type Printer } from "@/lib/printerStore";
+import { supabase } from "@/lib/supabase";
 
 export type PrinterReachability = {
   status: "unknown" | "checking" | "ok" | "fail" | "busy";
@@ -90,12 +91,27 @@ export async function probeOnePrinter(printer: Printer): Promise<{
  * Probe all enabled printers with a MAC.
  * Safe to call on hub open — waits for idle radio between printers.
  */
+async function hasActivePrintJobs(): Promise<boolean> {
+  const { data } = await supabase
+    .from("print_jobs")
+    .select("id")
+    .in("status", ["pending", "printing"])
+    .limit(1);
+  return !!(data && data.length > 0);
+}
+
 export async function probeAllPrinters(options?: {
   /** Only enabled printers (default true). */
   enabledOnly?: boolean;
+  /** When true, skip if queue has pending/printing jobs. */
+  skipIfBusyQueue?: boolean;
 }): Promise<void> {
   if (probing) {
     console.log("[BT PROBE] already running — skip");
+    return;
+  }
+  if (options?.skipIfBusyQueue !== false && (await hasActivePrintJobs())) {
+    console.log("[BT PROBE] skip — print_jobs pending/printing");
     return;
   }
   probing = true;
@@ -122,7 +138,7 @@ export async function probeAllPrinters(options?: {
 /**
  * Auto-run once per app session (or after cool-down) when this device is hub.
  */
-export function scheduleHubAutoBluetoothProbe(delayMs = 2500): () => void {
+export function scheduleHubAutoBluetoothProbe(delayMs = 4000): () => void {
   let cancelled = false;
   const t = window.setTimeout(() => {
     if (cancelled) return;
@@ -131,7 +147,7 @@ export function scheduleHubAutoBluetoothProbe(delayMs = 2500): () => void {
       console.log("[BT PROBE] skip auto — recent probe");
       return;
     }
-    void probeAllPrinters();
+    void probeAllPrinters({ skipIfBusyQueue: true });
   }, delayMs);
   return () => {
     cancelled = true;

@@ -76,7 +76,7 @@ export function PrinterManager() {
   const probePrinter = async (printer: Printer) => probeOnePrinter(printer);
 
   const probeAll = async () => {
-    await probeAllPrinters({ enabledOnly: false });
+    await probeAllPrinters({ enabledOnly: false, skipIfBusyQueue: false });
   };
 
   // Seed unknown rows; hub auto-probe runs from PrintQueueDaemon on open.

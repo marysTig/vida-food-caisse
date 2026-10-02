@@ -342,6 +342,7 @@ export function startPrintQueueDaemon(): () => void {
 
   const loop = async () => {
     console.log("[PRINT DAEMON] Started");
+    let radioBootstrapped = false;
     while (!stopped) {
       if (!isLocalDevicePrimaryHub()) {
         // Poll frequently so the daemon wakes promptly once the printSettingsStore
@@ -362,6 +363,16 @@ export function startPrintQueueDaemon(): () => void {
 
       draining = true;
       try {
+        // After logout/login the BT stack is often dirty mid-connect — settle once.
+        if (!radioBootstrapped) {
+          radioBootstrapped = true;
+          markRadioNeedsSettle("daemon-start");
+          try {
+            await hardSettleRadio("daemon-start");
+          } catch {
+            /* ignore */
+          }
+        }
         await reclaimStalePrintingJobs(getLocalPrintDeviceId());
 
         // Drain one job at a time (single-flight)

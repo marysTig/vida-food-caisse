@@ -506,13 +506,13 @@ export async function claimNextPrintJob(
 ): Promise<PrintJob | null> {
   const nowIso = new Date().toISOString();
 
-  // Receipt pending? Pause kitchen claims.
-  const { data: receiptPending } = await supabase
+  // Any receipt still in flight (pending OR printing, even during backoff)?
+  // Pause kitchen — logcat 22:52 showed kitchen attempt 3 while receipt retried.
+  const { data: receiptHold } = await supabase
     .from("print_jobs")
     .select("id")
-    .eq("status", "pending")
     .eq("job_type", "receipt")
-    .lte("next_attempt_at", nowIso)
+    .in("status", ["pending", "printing"])
     .limit(1);
 
   let query = supabase
@@ -524,7 +524,7 @@ export async function claimNextPrintJob(
     .order("created_at", { ascending: true })
     .limit(5);
 
-  if (receiptPending && receiptPending.length > 0) {
+  if (receiptHold && receiptHold.length > 0) {
     query = query.eq("job_type", "receipt");
   }
 
@@ -555,13 +555,13 @@ export async function claimNextPrintJob(
 }
 
 export async function hasPendingReceiptJob(): Promise<boolean> {
-  const nowIso = new Date().toISOString();
+  // Include printing + pending-not-yet-due so kitchen stays paused during
+  // receipt backoff (was claiming kitchen between caisse retries).
   const { data } = await supabase
     .from("print_jobs")
     .select("id")
-    .eq("status", "pending")
     .eq("job_type", "receipt")
-    .lte("next_attempt_at", nowIso)
+    .in("status", ["pending", "printing"])
     .limit(1);
   return !!(data && data.length > 0);
 }
