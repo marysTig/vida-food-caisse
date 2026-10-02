@@ -215,6 +215,10 @@ export const printerService = {
     ok: boolean;
     detail: string;
   }> {
+    // #region agent log
+    const _probeT0 = Date.now();
+    fetch('http://127.0.0.1:7680/ingest/b490126b-dfa2-4a19-9733-3902cacf3768',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'c5e869'},body:JSON.stringify({sessionId:'c5e869',runId:'hub-injoignable',hypothesisId:'A',location:'printerService.ts:verifyPrinterReachable',message:'probe_start',data:{name:printer.name,type:printer.type,mac:(printer.mac_address??'').slice(-5)},timestamp:Date.now()})}).catch(()=>{});
+    // #endregion
     if (!this.isNativePlatform()) {
       const ok = webConnectedDevices.has(printer.id);
       return {
@@ -239,6 +243,9 @@ export const printerService = {
         };
         const t = setTimeout(() => {
           finish(() => {
+            // #region agent log
+            fetch('http://127.0.0.1:7680/ingest/b490126b-dfa2-4a19-9733-3902cacf3768',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'c5e869'},body:JSON.stringify({sessionId:'c5e869',runId:'hub-injoignable',hypothesisId:'B',location:'printerService.ts:probe-timeout',message:'probe_3s_timeout',data:{name:printer.name,elapsedMs:Date.now()-_probeT0},timestamp:Date.now()})}).catch(()=>{});
+            // #endregion
             void forceDisconnectNative(`probe-timeout:${printer.name}`).then(() =>
               reject(new Error("Timeout ping Bluetooth (3s)")),
             );
@@ -258,6 +265,9 @@ export const printerService = {
               },
               (err: unknown) => {
                 console.log(`[BT] SOCKET_OPEN_ERR · probe · ${String(err)}`);
+                // #region agent log
+                fetch('http://127.0.0.1:7680/ingest/b490126b-dfa2-4a19-9733-3902cacf3768',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'c5e869'},body:JSON.stringify({sessionId:'c5e869',runId:'hub-injoignable',hypothesisId:'D',location:'printerService.ts:probe-err',message:'probe_connect_err',data:{name:printer.name,err:String(err),elapsedMs:Date.now()-_probeT0},timestamp:Date.now()})}).catch(()=>{});
+                // #endregion
                 void forceDisconnectNative(`probe-err:${printer.name}`).then(() =>
                   finish(() =>
                     reject(new Error("Connexion impossible: " + String(err))),
@@ -273,9 +283,15 @@ export const printerService = {
         );
       });
       await new Promise((r) => setTimeout(r, BT_HARD_SETTLE_MS));
+      // #region agent log
+      fetch('http://127.0.0.1:7680/ingest/b490126b-dfa2-4a19-9733-3902cacf3768',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'c5e869'},body:JSON.stringify({sessionId:'c5e869',runId:'hub-injoignable',hypothesisId:'A',location:'printerService.ts:probe-ok',message:'probe_ok',data:{name:printer.name,elapsedMs:Date.now()-_probeT0},timestamp:Date.now()})}).catch(()=>{});
+      // #endregion
       return { ok: true, detail: "Joignable (ping OK)" };
     } catch (err: unknown) {
       const detail = err instanceof Error ? err.message : String(err);
+      // #region agent log
+      fetch('http://127.0.0.1:7680/ingest/b490126b-dfa2-4a19-9733-3902cacf3768',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'c5e869'},body:JSON.stringify({sessionId:'c5e869',runId:'hub-injoignable',hypothesisId:'A',location:'printerService.ts:probe-fail',message:'probe_fail_ui_injoignable',data:{name:printer.name,detail,elapsedMs:Date.now()-_probeT0},timestamp:Date.now()})}).catch(()=>{});
+      // #endregion
       return { ok: false, detail };
     } finally {
       release();

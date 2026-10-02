@@ -95,6 +95,9 @@ export async function acquireKitchenRadio(
 ): Promise<{ signal: AbortSignal; release: () => void }> {
   if (mode === "receipt") {
     btLog("KITCHEN_DENIED", `receipt owns radio · ${owner}`);
+    // #region agent log
+    fetch('http://127.0.0.1:7680/ingest/b490126b-dfa2-4a19-9733-3902cacf3768',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'c5e869'},body:JSON.stringify({sessionId:'c5e869',runId:'hub-injoignable',hypothesisId:'E',location:'bluetoothRadio.ts:acquireKitchenRadio',message:'kitchen_denied_receipt_owns',data:{owner},timestamp:Date.now()})}).catch(()=>{});
+    // #endregion
     throw new KitchenAbortedError();
   }
   // Wait briefly only if another kitchen session is releasing
@@ -135,6 +138,9 @@ export async function acquireReceiptRadio(owner: string): Promise<{
   receiptGeneration += 1;
   const gen = receiptGeneration;
   btLog("RECEIPT_PREEMPT", owner);
+  // #region agent log
+  fetch('http://127.0.0.1:7680/ingest/b490126b-dfa2-4a19-9733-3902cacf3768',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'c5e869'},body:JSON.stringify({sessionId:'c5e869',runId:'hub-injoignable',hypothesisId:'A',location:'bluetoothRadio.ts:acquireReceiptRadio',message:'receipt_preempt',data:{owner,isProbe:owner.startsWith('probe:'),preemptKitchen:!!kitchenSession,mode},timestamp:Date.now()})}).catch(()=>{});
+  // #endregion
 
   const preemptedKitchen = !!kitchenSession;
   if (kitchenSession) {
