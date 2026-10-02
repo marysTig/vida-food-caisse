@@ -22,26 +22,43 @@ export function getKitchenPrintRealtimeManager(): RealtimeManager | null {
 }
 
 /**
- * Mounts the PrintQueueDaemon on the primary hub device only.
+ * Mounts the PrintQueueDaemon drain loop on every device after settings load.
+ * The loop itself no-ops until this device is the primary hub — so a late
+ * hub claim still starts printing without requiring a full app restart.
  */
 export function PrintQueueDaemon() {
-  const { isPrimaryHub, loading } = usePrintSettingsStore();
+  const { isPrimaryHub, loading, primaryDeviceId } = usePrintSettingsStore();
 
   useEffect(() => {
-    if (loading || !isPrimaryHub) {
-      if (_daemonManager) {
-        void _daemonManager.destroy();
-        _daemonManager = null;
-      }
+    if (loading) {
+      console.log("[PRINT DAEMON] Waiting for print_settings…");
       return;
     }
 
-    if (!isLocalDevicePrimaryHub()) return;
-
     const deviceId = getLocalPrintDeviceId();
-    console.log("[PRINT DAEMON] Mount primary hub:", deviceId);
+    console.log("[PRINT DAEMON] Settings ready", {
+      deviceId,
+      primaryDeviceId: primaryDeviceId || "(none)",
+      isPrimaryHub,
+    });
 
+    // Always start the drain loop. It polls isLocalDevicePrimaryHub() and
+    // idles until this phone is hub — fixes "reopen → never prints" when the
+    // React gate used to skip startPrintQueueDaemon entirely.
     const stop = startPrintQueueDaemon();
+    wakePrintQueueDaemon();
+
+    if (!isPrimaryHub) {
+      console.warn(
+        "[PRINT DAEMON] Not primary hub — Bluetooth drain idle. Claim hub in Admin → Imprimantes.",
+      );
+      return () => {
+        console.log("[PRINT DAEMON] Unmount (not hub)");
+        stop();
+      };
+    }
+
+    console.log("[PRINT DAEMON] Mount primary hub:", deviceId);
 
     const handlePayload = (payload: PostgresPayload) => {
       if (payload.eventType === "DELETE") return;
@@ -66,7 +83,6 @@ export function PrintQueueDaemon() {
     });
     _daemonManager = manager;
     void manager.init();
-    // Kick once on mount
     wakePrintQueueDaemon();
 
     return () => {
@@ -75,7 +91,7 @@ export function PrintQueueDaemon() {
       void manager.destroy();
       if (_daemonManager === manager) _daemonManager = null;
     };
-  }, [isPrimaryHub, loading]);
+  }, [isPrimaryHub, loading, primaryDeviceId]);
 
   return null;
 }

@@ -31,12 +31,15 @@ import { getPrintersFromStore } from "@/lib/printerStore";
 import { getLocalPrintDeviceId } from "@/lib/printDevice";
 import { isLocalDevicePrimaryHub } from "@/lib/printSettingsStore";
 import { logPrintActivity, updatePrintActivity } from "@/lib/printActivityLog";
+import { agentDebugLog } from "@/lib/agentDebugLog";
 
 let lastSuccessMac: string | null = null;
 let draining = false;
 let currentKitchenJobId: string | null = null;
 let kitchenAbort: AbortController | null = null;
 let wakeDrain: (() => void) | null = null;
+/** Ensures only one drain loop exists (React remount / hub flip). */
+let stopActiveDaemon: (() => void) | null = null;
 
 function notifyDrain() {
   wakeDrain?.();
@@ -64,13 +67,11 @@ async function sendJobBytes(job: PrintJob, data: Uint8Array): Promise<"ok" | "ab
   if (job.job_type === "receipt") {
     const t0 = Date.now();
     // #region agent log
-    console.log(`[CAISSE LATENCY] send_begin · ${name} · job=${job.id}`);
-    fetch('http://127.0.0.1:7680/ingest/b490126b-dfa2-4a19-9733-3902cacf3768',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'c5e869'},body:JSON.stringify({sessionId:'c5e869',runId:'caisse-latency',hypothesisId:'A',location:'printQueueDaemon.ts:sendJobBytes',message:'receipt_send_begin',data:{jobId:job.id,name,t:t0},timestamp:Date.now()})}).catch(()=>{});
+    agentDebugLog("printQueueDaemon.ts:sendJobBytes", "receipt_send_begin", { jobId: job.id, name, t: t0 }, "A");
     // #endregion
     const { release } = await acquireReceiptRadio(`daemon-receipt:${job.id}`);
     // #region agent log
-    console.log(`[CAISSE LATENCY] radio_acquired · ${name} · acquireMs=${Date.now()-t0}`);
-    fetch('http://127.0.0.1:7680/ingest/b490126b-dfa2-4a19-9733-3902cacf3768',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'c5e869'},body:JSON.stringify({sessionId:'c5e869',runId:'caisse-latency',hypothesisId:'B',location:'printQueueDaemon.ts:sendJobBytes',message:'receipt_radio_acquired',data:{jobId:job.id,acquireMs:Date.now()-t0},timestamp:Date.now()})}).catch(()=>{});
+    agentDebugLog("printQueueDaemon.ts:sendJobBytes", "receipt_radio_acquired", { jobId: job.id, acquireMs: Date.now() - t0 }, "B");
     // #endregion
     try {
       // Momentary caisse: skip trailing settle (acquire already settled once)
@@ -84,8 +85,7 @@ async function sendJobBytes(job: PrintJob, data: Uint8Array): Promise<"ok" | "ab
         skipPostSettle: true,
       });
       // #region agent log
-      console.log(`[CAISSE LATENCY] send_ok · ${name} · sendMs=${Date.now()-tSend} · totalMs=${Date.now()-t0}`);
-      fetch('http://127.0.0.1:7680/ingest/b490126b-dfa2-4a19-9733-3902cacf3768',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'c5e869'},body:JSON.stringify({sessionId:'c5e869',runId:'caisse-latency',hypothesisId:'E',location:'printQueueDaemon.ts:sendJobBytes',message:'receipt_send_ok',data:{jobId:job.id,sendMs:Date.now()-tSend,totalMs:Date.now()-t0},timestamp:Date.now()})}).catch(()=>{});
+      agentDebugLog("printQueueDaemon.ts:sendJobBytes", "receipt_send_ok", { jobId: job.id, sendMs: Date.now() - tSend, totalMs: Date.now() - t0 }, "E");
       // #endregion
       lastSuccessMac = mac;
       return "ok";
@@ -205,8 +205,7 @@ async function processJob(job: PrintJob): Promise<void> {
   console.log(`[PRINT START] ${job.printer_name}`);
   // #region agent log
   if (job.job_type === "receipt") {
-    console.log(`[CAISSE LATENCY] claimed · ${job.printer_name} · t=${Date.now()}`);
-    fetch('http://127.0.0.1:7680/ingest/b490126b-dfa2-4a19-9733-3902cacf3768',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'c5e869'},body:JSON.stringify({sessionId:'c5e869',runId:'caisse-latency',hypothesisId:'A',location:'printQueueDaemon.ts:processJob',message:'receipt_claimed',data:{jobId:job.id,printer:job.printer_name,attempt:job.attempt_count+1,t:Date.now()},timestamp:Date.now()})}).catch(()=>{});
+    agentDebugLog("printQueueDaemon.ts:processJob", "receipt_claimed", { jobId: job.id, printer: job.printer_name, attempt: job.attempt_count + 1 }, "A");
   }
   // #endregion
 
@@ -269,8 +268,11 @@ const MAX_ATTEMPTS_FORCE = 99;
 
 /**
  * Single-flight drain loop. Call startPrintQueueDaemon once on primary hub.
+ * Safe to call again — stops any previous loop first.
  */
 export function startPrintQueueDaemon(): () => void {
+  stopActiveDaemon?.();
+
   let stopped = false;
   let waitResolve: (() => void) | null = null;
   /** Set when wake arrives before waitForWake — prevents lost-wakeup (~1s caisse lag). */
@@ -348,9 +350,12 @@ export function startPrintQueueDaemon(): () => void {
 
   void loop();
 
-  return () => {
+  const stop = () => {
     stopped = true;
+    if (stopActiveDaemon === stop) stopActiveDaemon = null;
     wakeDrain = null;
     waitResolve?.();
   };
+  stopActiveDaemon = stop;
+  return stop;
 }

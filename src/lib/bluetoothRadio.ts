@@ -108,15 +108,12 @@ export function isKitchenAborted(signal?: AbortSignal): boolean {
 /** Force native disconnect; resolves after plugin callback or cap. */
 export function forceDisconnectNative(reason: string): Promise<void> {
   return new Promise((resolve) => {
-    if (reason.includes("after-write")) {
-      // Clean close after a successful print — radio is settled.
-      radioNeedsSettle = false;
-    } else if (
-      reason.includes("abort") ||
-      reason.includes("kitchen") ||
-      reason.includes("pre-connect")
-    ) {
+    // Only abort paths leave the adapter dirty (logcat 21:49:05).
+    // Successful after-write clears it. Do NOT mark dirty on every pre-connect.
+    if (reason.includes("abort")) {
       radioNeedsSettle = true;
+    } else if (reason.includes("after-write")) {
+      radioNeedsSettle = false;
     }
     if (typeof window === "undefined" || !window.bluetoothSerial) {
       resolve();
@@ -290,7 +287,6 @@ export async function acquireReceiptRadio(owner: string): Promise<{
   }
   // #region agent log
   console.log(`[CAISSE LATENCY] acquire_done · preemptedKitchen=${preemptedKitchen} · needsSettle=${needsSettle} · settleMs=${settleMs}`);
-  fetch('http://127.0.0.1:7680/ingest/b490126b-dfa2-4a19-9733-3902cacf3768',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'c5e869'},body:JSON.stringify({sessionId:'c5e869',runId:'caisse-latency',hypothesisId:'B',location:'bluetoothRadio.ts:acquireReceiptRadio',message:'receipt_acquire_done',data:{owner,waitedMs:Date.now()-waitStart-settleMs,preemptedKitchen,needsSettle,settleMs,totalAcquireMs:Date.now()-waitStart},timestamp:Date.now()})}).catch(()=>{});
   // #endregion
 
   let released = false;
