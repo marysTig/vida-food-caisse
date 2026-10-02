@@ -7,8 +7,6 @@
 export const BT_HARD_SETTLE_MS = 1500;
 /** Extra cool-down after aborting a kitchen connect before opening caisse. */
 export const BT_RECEIPT_PREEMPT_EXTRA_MS = 1000;
-/** Short settle when radio was just used/aborted (avoids Device connection was lost). */
-export const BT_RECEIPT_QUICK_SETTLE_MS = 500;
 /** Connect+write budget after settle (must cover native SPP + channel-1 fallback). */
 export const BT_OP_TIMEOUT_MS = 20000;
 export const BT_PRE_DISCONNECT_DRAIN_MS = 350;
@@ -282,12 +280,9 @@ export async function acquireReceiptRadio(owner: string): Promise<{
   }
 
   mode = "receipt";
-  // Settle when we preempted kitchen OR radio is dirty from a prior kitchen/caisse
-  // job. Quick 500ms was not enough after Four→Roza (c5a66150 hung 20s).
-  let settleMs = 0;
+  // Settle when we preempted kitchen OR radio is dirty from a prior job.
   const needsSettle = preemptedKitchen || radioNeedsSettle;
   if (needsSettle) {
-    const tSettle = Date.now();
     await hardSettleRadio(
       preemptedKitchen ? `receipt-preempt:${owner}` : `receipt-dirty:${owner}`,
     );
@@ -295,11 +290,7 @@ export async function acquireReceiptRadio(owner: string): Promise<{
       btLog("RECEIPT_PREEMPT_EXTRA", `${BT_RECEIPT_PREEMPT_EXTRA_MS}ms`);
       await sleep(BT_RECEIPT_PREEMPT_EXTRA_MS);
     }
-    settleMs = Date.now() - tSettle;
   }
-  // #region agent log
-  console.log(`[CAISSE LATENCY] acquire_done · preemptedKitchen=${preemptedKitchen} · needsSettle=${needsSettle} · settleMs=${settleMs}`);
-  // #endregion
 
   let released = false;
   return {

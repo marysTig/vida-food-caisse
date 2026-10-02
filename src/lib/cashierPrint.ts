@@ -6,7 +6,6 @@ import { enqueueReceipt } from "@/lib/kitchenPrintQueue";
 import { logPrintActivity } from "@/lib/printActivityLog";
 import { wakePrintQueueDaemon } from "@/lib/printQueueDaemon";
 import { isLocalDevicePrimaryHub } from "@/lib/printSettingsStore";
-import { agentDebugLog } from "@/lib/agentDebugLog";
 
 export type CashierPrintResult = {
   attempted: number;
@@ -103,19 +102,6 @@ export async function runCashierReceiptPrint(params: {
   });
 
   wakePrintQueueDaemon();
-  // #region agent log
-  agentDebugLog(
-    "cashierPrint.ts:enqueue",
-    "caisse_enqueued_woke",
-    {
-      printer: caisse.name,
-      mac: mac.slice(-5),
-      label: String(label),
-      isHub: isLocalDevicePrimaryHub(),
-    },
-    "A",
-  );
-  // #endregion
   toast.success("Ticket en file d'impression", {
     description: caisse.name,
     duration: 2500,

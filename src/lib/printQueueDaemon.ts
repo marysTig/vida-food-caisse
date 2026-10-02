@@ -31,7 +31,6 @@ import { getPrintersFromStore } from "@/lib/printerStore";
 import { getLocalPrintDeviceId } from "@/lib/printDevice";
 import { isLocalDevicePrimaryHub } from "@/lib/printSettingsStore";
 import { logPrintActivity, updatePrintActivity } from "@/lib/printActivityLog";
-import { agentDebugLog } from "@/lib/agentDebugLog";
 
 let lastSuccessMac: string | null = null;
 let draining = false;
@@ -65,53 +64,24 @@ async function sendJobBytes(job: PrintJob, data: Uint8Array): Promise<"ok" | "ab
   if (!mac) throw new Error("Adresse MAC manquante");
 
   if (job.job_type === "receipt") {
-    const t0 = Date.now();
-    // #region agent log
-    agentDebugLog("printQueueDaemon.ts:sendJobBytes", "receipt_send_begin", { jobId: job.id, name, t: t0 }, "A");
-    // #endregion
-    const { release, didSettle } = await acquireReceiptRadio(
-      `daemon-receipt:${job.id}`,
-    );
-    // #region agent log
-    agentDebugLog(
-      "printQueueDaemon.ts:sendJobBytes",
-      "receipt_radio_acquired",
-      { jobId: job.id, acquireMs: Date.now() - t0, didSettle },
-      "B",
-    );
-    // #endregion
+    const { release } = await acquireReceiptRadio(`daemon-receipt:${job.id}`);
     try {
-      const tSend = Date.now();
       try {
         await nativeSendEscPos({
           priority: "receipt",
           printerName: name,
           macAddress: mac,
           data,
-          // Acquire settles when dirty; when clean, connect immediately.
-          // (skipPreSettle:didSettle forced a useless 1.5s pre-connect after RADIO_CLEAN
-          // — logcat ef56a1cf ~22:59:19.)
+          // Acquire already hard-settles when the radio is dirty.
           skipPreSettle: true,
           skipPostSettle: true,
         });
       } catch (err) {
-        // One local retry after hard settle — logcat c5a66150 needed 3 DB
-        // attempts (~38s) when first connect hung with PRESETTLE_SKIP.
+        // One local retry after hard settle (avoids multi-minute DB retry loops).
         console.warn(
           `[PRINT DAEMON] receipt connect fail, local retry after settle:`,
           err instanceof Error ? err.message : err,
         );
-        // #region agent log
-        agentDebugLog(
-          "printQueueDaemon.ts:sendJobBytes",
-          "receipt_local_retry",
-          {
-            jobId: job.id,
-            err: err instanceof Error ? err.message : String(err),
-          },
-          "H-caisse-settle",
-        );
-        // #endregion
         markRadioNeedsSettle("receipt-local-retry");
         await hardSettleRadio(`receipt-retry:${name}`);
         await nativeSendEscPos({
@@ -123,9 +93,6 @@ async function sendJobBytes(job: PrintJob, data: Uint8Array): Promise<"ok" | "ab
           skipPostSettle: true,
         });
       }
-      // #region agent log
-      agentDebugLog("printQueueDaemon.ts:sendJobBytes", "receipt_send_ok", { jobId: job.id, sendMs: Date.now() - tSend, totalMs: Date.now() - t0 }, "E");
-      // #endregion
       lastSuccessMac = mac;
       return "ok";
     } finally {
@@ -241,11 +208,6 @@ async function processJob(job: PrintJob): Promise<void> {
     `[PRINT DAEMON] ${job.job_type} → ${job.printer_name} (attempt ${job.attempt_count + 1})`,
   );
   console.log(`[PRINT START] ${job.printer_name}`);
-  // #region agent log
-  if (job.job_type === "receipt") {
-    agentDebugLog("printQueueDaemon.ts:processJob", "receipt_claimed", { jobId: job.id, printer: job.printer_name, attempt: job.attempt_count + 1 }, "A");
-  }
-  // #endregion
 
   try {
     const result = await sendJobBytes(job, data);
