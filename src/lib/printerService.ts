@@ -10,6 +10,7 @@ import {
   nativeSendEscPos,
   getRadioMode,
   forceDisconnectNative,
+  hardSettleRadio,
   BT_HARD_SETTLE_MS,
   BT_OP_TIMEOUT_MS,
 } from "@/lib/bluetoothRadio";
@@ -250,15 +251,21 @@ export const printerService = {
         const t = setTimeout(() => {
           finish(() => {
             // #region agent log
-            fetch('http://127.0.0.1:7680/ingest/b490126b-dfa2-4a19-9733-3902cacf3768',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'c5e869'},body:JSON.stringify({sessionId:'c5e869',runId:'post-fix',hypothesisId:'B',location:'printerService.ts:probe-timeout',message:'probe_timeout',data:{name:printer.name,timeoutMs:BT_OP_TIMEOUT_MS,elapsedMs:Date.now()-_probeT0},timestamp:Date.now()})}).catch(()=>{});
+            fetch('http://127.0.0.1:7680/ingest/b490126b-dfa2-4a19-9733-3902cacf3768',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'c5e869'},body:JSON.stringify({sessionId:'c5e869',runId:'post-fix',hypothesisId:'I',location:'printerService.ts:probe-timeout',message:'probe_timeout_settle',data:{name:printer.name,timeoutMs:BT_OP_TIMEOUT_MS,elapsedMs:Date.now()-_probeT0},timestamp:Date.now()})}).catch(()=>{});
             // #endregion
-            void forceDisconnectNative(`probe-timeout:${printer.name}`).then(() =>
+            // Must fully kill native ConnectThread before next printer probe
+            void (async () => {
+              try {
+                await hardSettleRadio(`probe-timeout:${printer.name}`);
+              } catch {
+                /* ignore */
+              }
               reject(
                 new Error(
                   `Timeout ping Bluetooth (${BT_OP_TIMEOUT_MS / 1000}s)`,
                 ),
-              ),
-            );
+              );
+            })();
           });
         }, BT_OP_TIMEOUT_MS);
 
@@ -268,16 +275,16 @@ export const printerService = {
             void nativeConnect(mac, `probe:${printer.name}`)
               .then(() => {
                 console.log(`[BT] SOCKET_OPEN_OK · probe · ${printer.name}`);
-                void forceDisconnectNative(`probe-ok:${printer.name}`).then(() =>
+                void hardSettleRadio(`probe-ok:${printer.name}`).then(() =>
                   finish(() => resolve()),
                 );
               })
               .catch((err: unknown) => {
                 console.log(`[BT] SOCKET_OPEN_ERR · probe · ${String(err)}`);
                 // #region agent log
-                fetch('http://127.0.0.1:7680/ingest/b490126b-dfa2-4a19-9733-3902cacf3768',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'c5e869'},body:JSON.stringify({sessionId:'c5e869',runId:'post-fix',hypothesisId:'G',location:'printerService.ts:probe-err',message:'probe_connect_err',data:{name:printer.name,err:String(err),elapsedMs:Date.now()-_probeT0},timestamp:Date.now()})}).catch(()=>{});
+                fetch('http://127.0.0.1:7680/ingest/b490126b-dfa2-4a19-9733-3902cacf3768',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'c5e869'},body:JSON.stringify({sessionId:'c5e869',runId:'post-fix',hypothesisId:'I',location:'printerService.ts:probe-err',message:'probe_connect_err',data:{name:printer.name,err:String(err),mac:mac.slice(-5),elapsedMs:Date.now()-_probeT0},timestamp:Date.now()})}).catch(()=>{});
                 // #endregion
-                void forceDisconnectNative(`probe-err:${printer.name}`).then(() =>
+                void hardSettleRadio(`probe-err:${printer.name}`).then(() =>
                   finish(() =>
                     reject(new Error("Connexion impossible: " + String(err))),
                   ),
@@ -290,10 +297,6 @@ export const printerService = {
             ),
         );
       });
-      await new Promise((r) => setTimeout(r, BT_HARD_SETTLE_MS));
-      // #region agent log
-      fetch('http://127.0.0.1:7680/ingest/b490126b-dfa2-4a19-9733-3902cacf3768',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'c5e869'},body:JSON.stringify({sessionId:'c5e869',runId:'post-fix',hypothesisId:'A',location:'printerService.ts:probe-ok',message:'probe_ok',data:{name:printer.name,elapsedMs:Date.now()-_probeT0},timestamp:Date.now()})}).catch(()=>{});
-      // #endregion
       return { ok: true, detail: "Joignable (ping OK)" };
     } catch (err: unknown) {
       const detail = err instanceof Error ? err.message : String(err);

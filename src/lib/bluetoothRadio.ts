@@ -7,8 +7,8 @@
 export const BT_HARD_SETTLE_MS = 1500;
 /** Extra cool-down after aborting a kitchen connect before opening caisse. */
 export const BT_RECEIPT_PREEMPT_EXTRA_MS = 1000;
-/** Connect+write budget after settle (sole timeout owner for daemon jobs). */
-export const BT_OP_TIMEOUT_MS = 8000;
+/** Connect+write budget after settle (must cover native SPP + channel-1 fallback). */
+export const BT_OP_TIMEOUT_MS = 20000;
 export const BT_PRE_DISCONNECT_DRAIN_MS = 350;
 /** Max wait for disconnect callback before continuing settle. */
 export const BT_DISCONNECT_CALLBACK_CAP_MS = 500;
