@@ -69,21 +69,58 @@ async function sendJobBytes(job: PrintJob, data: Uint8Array): Promise<"ok" | "ab
     // #region agent log
     agentDebugLog("printQueueDaemon.ts:sendJobBytes", "receipt_send_begin", { jobId: job.id, name, t: t0 }, "A");
     // #endregion
-    const { release } = await acquireReceiptRadio(`daemon-receipt:${job.id}`);
+    const { release, didSettle } = await acquireReceiptRadio(
+      `daemon-receipt:${job.id}`,
+    );
     // #region agent log
-    agentDebugLog("printQueueDaemon.ts:sendJobBytes", "receipt_radio_acquired", { jobId: job.id, acquireMs: Date.now() - t0 }, "B");
+    agentDebugLog(
+      "printQueueDaemon.ts:sendJobBytes",
+      "receipt_radio_acquired",
+      { jobId: job.id, acquireMs: Date.now() - t0, didSettle },
+      "B",
+    );
     // #endregion
     try {
-      // Momentary caisse: skip trailing settle (acquire already settled once)
       const tSend = Date.now();
-      await nativeSendEscPos({
-        priority: "receipt",
-        printerName: name,
-        macAddress: mac,
-        data,
-        skipPreSettle: true,
-        skipPostSettle: true,
-      });
+      try {
+        await nativeSendEscPos({
+          priority: "receipt",
+          printerName: name,
+          macAddress: mac,
+          data,
+          // Only skip pre-settle when acquire already hard-settled the radio.
+          skipPreSettle: didSettle,
+          skipPostSettle: true,
+        });
+      } catch (err) {
+        // One local retry after hard settle — logcat c5a66150 needed 3 DB
+        // attempts (~38s) when first connect hung with PRESETTLE_SKIP.
+        console.warn(
+          `[PRINT DAEMON] receipt connect fail, local retry after settle:`,
+          err instanceof Error ? err.message : err,
+        );
+        // #region agent log
+        agentDebugLog(
+          "printQueueDaemon.ts:sendJobBytes",
+          "receipt_local_retry",
+          {
+            jobId: job.id,
+            err: err instanceof Error ? err.message : String(err),
+          },
+          "H-caisse-settle",
+        );
+        // #endregion
+        markRadioNeedsSettle("receipt-local-retry");
+        await hardSettleRadio(`receipt-retry:${name}`);
+        await nativeSendEscPos({
+          priority: "receipt",
+          printerName: name,
+          macAddress: mac,
+          data,
+          skipPreSettle: true,
+          skipPostSettle: true,
+        });
+      }
       // #region agent log
       agentDebugLog("printQueueDaemon.ts:sendJobBytes", "receipt_send_ok", { jobId: job.id, sendMs: Date.now() - tSend, totalMs: Date.now() - t0 }, "E");
       // #endregion
@@ -91,7 +128,6 @@ async function sendJobBytes(job: PrintJob, data: Uint8Array): Promise<"ok" | "ab
       return "ok";
     } finally {
       release();
-      // No second hardSettle — native disconnect already closed the socket
     }
   }
 

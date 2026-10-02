@@ -108,12 +108,18 @@ export function isKitchenAborted(signal?: AbortSignal): boolean {
 /** Force native disconnect; resolves after plugin callback or cap. */
 export function forceDisconnectNative(reason: string): Promise<void> {
   return new Promise((resolve) => {
-    // Only abort paths leave the adapter dirty (logcat 21:49:05).
-    // Successful after-write clears it. Do NOT mark dirty on every pre-connect.
-    if (reason.includes("abort")) {
+    // Any real socket teardown leaves RFCOMM dirty until hardSettle.
+    // Clearing dirty on after-write caused caisse SOCKET_PRESETTLE_SKIP →
+    // 20s SOCKET_TIMEOUT then Unable to connect (logcat c5a66150 ~22:38:47).
+    if (
+      reason.includes("abort") ||
+      reason.includes("after-write") ||
+      reason.includes("timeout") ||
+      reason.includes("open-err") ||
+      reason.includes("write-err") ||
+      reason.includes("job-fail")
+    ) {
       radioNeedsSettle = true;
-    } else if (reason.includes("after-write")) {
-      radioNeedsSettle = false;
     }
     if (typeof window === "undefined" || !window.bluetoothSerial) {
       resolve();
@@ -150,6 +156,7 @@ export async function hardSettleRadio(label: string): Promise<void> {
   await forceDisconnectNative(label);
   btLog("SOCKET_SETTLE", `${label} · ${BT_HARD_SETTLE_MS}ms`);
   await sleep(BT_HARD_SETTLE_MS);
+  radioNeedsSettle = false;
   btLog("SOCKET_SETTLE_DONE", label);
 }
 
@@ -236,6 +243,8 @@ export async function acquireKitchenRadio(
  */
 export async function acquireReceiptRadio(owner: string): Promise<{
   release: () => void;
+  /** True when acquire already hard-settled — caller may skipPreSettle. */
+  didSettle: boolean;
 }> {
   // CRITICAL: probes and receipts both use mode "receipt". Stealing mid-connect
   // (bumping gen while SOCKET_OPEN is in flight) caused dual SPP → Unable to connect
@@ -266,23 +275,19 @@ export async function acquireReceiptRadio(owner: string): Promise<{
   }
 
   mode = "receipt";
-  // Settle when we preempted kitchen OR radio is dirty from a prior abort
-  // (kitchenAbort releases session before acquire → preemptedKitchen false,
-  // but connect without settle → Device connection was lost @ 21:49:05).
+  // Settle when we preempted kitchen OR radio is dirty from a prior kitchen/caisse
+  // job. Quick 500ms was not enough after Four→Roza (c5a66150 hung 20s).
   let settleMs = 0;
   const needsSettle = preemptedKitchen || radioNeedsSettle;
   if (needsSettle) {
     const tSettle = Date.now();
+    await hardSettleRadio(
+      preemptedKitchen ? `receipt-preempt:${owner}` : `receipt-dirty:${owner}`,
+    );
     if (preemptedKitchen) {
-      await hardSettleRadio(`receipt-preempt:${owner}`);
       btLog("RECEIPT_PREEMPT_EXTRA", `${BT_RECEIPT_PREEMPT_EXTRA_MS}ms`);
       await sleep(BT_RECEIPT_PREEMPT_EXTRA_MS);
-    } else {
-      await forceDisconnectNative(`receipt-dirty:${owner}`);
-      btLog("RECEIPT_QUICK_SETTLE", `${BT_RECEIPT_QUICK_SETTLE_MS}ms`);
-      await sleep(BT_RECEIPT_QUICK_SETTLE_MS);
     }
-    radioNeedsSettle = false;
     settleMs = Date.now() - tSettle;
   }
   // #region agent log
@@ -291,6 +296,7 @@ export async function acquireReceiptRadio(owner: string): Promise<{
 
   let released = false;
   return {
+    didSettle: needsSettle,
     release: () => {
       if (released) return;
       released = true;

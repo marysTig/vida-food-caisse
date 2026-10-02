@@ -102,14 +102,14 @@ async function sendReceiptNative(
   if (!printer.mac_address?.trim()) {
     throw new Error("Adresse MAC non configurée pour " + printer.name);
   }
-  const { release } = await acquireReceiptRadio(printer.name);
+  const { release, didSettle } = await acquireReceiptRadio(printer.name);
   try {
     await nativeSendEscPos({
       priority: "receipt",
       printerName: printer.name,
       macAddress: printer.mac_address.trim(),
       data,
-      skipPreSettle: true, // acquireReceiptRadio already hard-settled
+      skipPreSettle: didSettle,
     });
   } finally {
     release();
