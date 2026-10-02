@@ -63,19 +63,6 @@ export function ProductCard({ product, onSelect, readOnly = false }: ProductCard
               ? formatDA(Math.min(...product.options.map(o => o.price)))
               : formatDA(product.price)}
           </p>
-          {/* Bouton + toujours visible sur mobile, visible au hover sur desktop */}
-          {!readOnly && product.available && (
-            <button
-              type="button"
-              onClick={(e) => {
-                e.stopPropagation();
-                onSelect?.(product);
-              }}
-              className="flex h-8 w-8 items-center justify-center rounded-full bg-primary text-primary-foreground shadow-md transition-all active:scale-90 md:opacity-0 md:group-hover:opacity-100 md:scale-90 md:group-hover:scale-100 absolute bottom-3 right-3"
-            >
-              <Plus className="h-4 w-4" strokeWidth={2.5} />
-            </button>
-          )}
         </div>
       </div>
     </>

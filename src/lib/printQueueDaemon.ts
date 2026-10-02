@@ -15,7 +15,6 @@ import {
 } from "@/lib/bluetoothRadio";
 import { base64ToUint8 } from "@/lib/escposTickets";
 import {
-  INTER_PRINTER_GAP_MS,
   claimNextPrintJob,
   enqueueConsolKitchenJob,
   hasPendingReceiptJob,
@@ -54,41 +53,10 @@ export function wakePrintQueueDaemon() {
   })();
 }
 
-async function waitInterPrinterGap(nextMac: string, jobType?: string): Promise<number> {
-  // Caisse: skip full 4s gap, no extra cooldown needed because previous disconnect callback already resolved
-  if (jobType === "receipt") {
-    return 0;
-  }
-
-  if (!lastSuccessMac || lastSuccessMac === nextMac) {
-    return 0;
-  }
-  console.log(
-    `[PRINT DAEMON] Inter-printer gap ${INTER_PRINTER_GAP_MS}ms (${lastSuccessMac} → ${nextMac})`,
-  );
-
-  // Interruptible: if a receipt arrives mid-gap, abort kitchen so caisse runs now
-  const deadline = Date.now() + INTER_PRINTER_GAP_MS;
-  while (Date.now() < deadline) {
-    if (kitchenAbort?.signal.aborted || (await hasPendingReceiptJob())) {
-      throw new KitchenAbortedError();
-    }
-    await sleep(Math.min(250, deadline - Date.now()));
-  }
-  return INTER_PRINTER_GAP_MS;
-}
-
 async function sendJobBytes(job: PrintJob, data: Uint8Array): Promise<"ok" | "aborted"> {
   const mac = (job.mac_address ?? "").trim();
   const name = job.printer_name ?? "imprimante";
   if (!mac) throw new Error("Adresse MAC manquante");
-
-  try {
-    await waitInterPrinterGap(mac, job.job_type);
-  } catch (err) {
-    if (err instanceof KitchenAbortedError) return "aborted";
-    throw err;
-  }
 
   if (job.job_type === "receipt") {
     const { release } = await acquireReceiptRadio(`daemon-receipt:${job.id}`);
@@ -217,6 +185,7 @@ async function processJob(job: PrintJob): Promise<void> {
   console.log(
     `[PRINT DAEMON] ${job.job_type} → ${job.printer_name} (attempt ${job.attempt_count + 1})`,
   );
+  console.log(`[PRINT START] ${job.printer_name}`);
 
   try {
     const result = await sendJobBytes(job, data);
@@ -239,6 +208,7 @@ async function processJob(job: PrintJob): Promise<void> {
         job.payload.fingerprints,
       );
     }
+    console.log(`[PRINT END] ${job.printer_name}`);
     console.log(`[PRINT DAEMON] Done ${job.id}`);
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
@@ -259,6 +229,7 @@ async function processJob(job: PrintJob): Promise<void> {
       });
       await tryAutoConsol(job);
     }
+    console.log(`[PRINT END] ${job.printer_name}`);
   }
 }
 

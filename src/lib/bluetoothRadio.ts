@@ -83,8 +83,6 @@ export function forceDisconnectNative(reason: string): Promise<void> {
 /** Full adapter shutdown + hard settle before next connect. */
 export async function hardSettleRadio(label: string): Promise<void> {
   await forceDisconnectNative(label);
-  btLog("SOCKET_SETTLE", `${label} · ${BT_HARD_SETTLE_MS}ms`);
-  await sleep(BT_HARD_SETTLE_MS);
   btLog("SOCKET_SETTLE_DONE", label);
 }
 
@@ -235,8 +233,7 @@ export async function nativeSendEscPos(opts: NativeSendOptions): Promise<void> {
     const timeoutId = setTimeout(() => {
       finish(() => {
         btLog("SOCKET_TIMEOUT", `${printerName} · ${BT_OP_TIMEOUT_MS}ms`);
-        void forceDisconnectNative(`timeout:${printerName}`).then(async () => {
-          await sleep(BT_HARD_SETTLE_MS);
+        void forceDisconnectNative(`timeout:${printerName}`).then(() => {
           reject(
             new Error(
               `Délai d'attente dépassé pour ${printerName}. L'imprimante est-elle allumée ?`,
@@ -247,6 +244,7 @@ export async function nativeSendEscPos(opts: NativeSendOptions): Promise<void> {
     }, BT_OP_TIMEOUT_MS);
 
     const doConnect = () => {
+      console.log(`[CONNECT START] ${printerName}`);
       btLog("SOCKET_OPEN", `${printerName} · ${macAddress}`);
       window.bluetoothSerial.connect(
         macAddress,
@@ -260,6 +258,7 @@ export async function nativeSendEscPos(opts: NativeSendOptions): Promise<void> {
             onAbort();
             return;
           }
+          console.log(`[CONNECTED] ${printerName}`);
           btLog("SOCKET_OPEN_OK", `${printerName} · bytes=${data.byteLength}`);
 
           // Critical: use a precise ArrayBuffer slice — data.buffer alone can be
@@ -269,6 +268,7 @@ export async function nativeSendEscPos(opts: NativeSendOptions): Promise<void> {
             data.byteOffset + data.byteLength,
           );
 
+          console.log(`[SEND START] ${printerName}`);
           window.bluetoothSerial.write(
             writePayload,
             () => {
@@ -281,6 +281,7 @@ export async function nativeSendEscPos(opts: NativeSendOptions): Promise<void> {
                 onAbort();
                 return;
               }
+              console.log(`[SEND COMPLETE] ${printerName}`);
               btLog("SOCKET_WRITE_OK", `${printerName} · bytes=${data.byteLength}`);
 
               void (async () => {
@@ -291,32 +292,21 @@ export async function nativeSendEscPos(opts: NativeSendOptions): Promise<void> {
                   return;
                 }
                 // Explicit close: await disconnect callback before settle/resolve
+                console.log(`[DISCONNECT START] ${printerName}`);
                 btLog("SOCKET_CLOSE", `${printerName} · after-write-flush`);
                 await forceDisconnectNative(`after-write:${printerName}`);
+                console.log(`[DISCONNECTED] ${printerName}`);
                 if (settled) return;
                 finish(() => {
-                  if (skipPostSettle) {
-                    btLog("SOCKET_SETTLE_SKIP", printerName);
-                    resolve();
-                    return;
-                  }
-                  void sleep(BT_HARD_SETTLE_MS).then(() => {
-                    btLog(
-                      "SOCKET_SETTLE_DONE",
-                      `${printerName} · ${BT_HARD_SETTLE_MS}ms`,
-                    );
-                    resolve();
-                  });
+                  btLog("SOCKET_SETTLE_DONE", printerName);
+                  resolve();
                 });
               })();
             },
             (err: unknown) => {
               btLog("SOCKET_WRITE_ERR", `${printerName} · ${String(err)}`);
               void forceDisconnectNative(`write-err:${printerName}`).then(
-                async () => {
-                  await sleep(BT_HARD_SETTLE_MS);
-                  finish(() => reject(new Error("Erreur écriture: " + err)));
-                },
+                () => finish(() => reject(new Error("Erreur écriture: " + err)))
               );
             },
           );
@@ -324,16 +314,13 @@ export async function nativeSendEscPos(opts: NativeSendOptions): Promise<void> {
         (err: unknown) => {
           btLog("SOCKET_OPEN_ERR", `${printerName} · ${String(err)}`);
           void forceDisconnectNative(`open-err:${printerName}`).then(
-            async () => {
-              await sleep(BT_HARD_SETTLE_MS);
-              finish(() =>
-                reject(
-                  new Error(
-                    "Connexion impossible (Vérifiez l'imprimante): " + err,
-                  ),
+            () => finish(() =>
+              reject(
+                new Error(
+                  "Connexion impossible (Vérifiez l'imprimante): " + err,
                 ),
-              );
-            },
+              ),
+            ),
           );
         },
       );
