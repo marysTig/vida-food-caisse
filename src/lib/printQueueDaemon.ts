@@ -88,8 +88,10 @@ async function sendJobBytes(job: PrintJob, data: Uint8Array): Promise<"ok" | "ab
           printerName: name,
           macAddress: mac,
           data,
-          // Only skip pre-settle when acquire already hard-settled the radio.
-          skipPreSettle: didSettle,
+          // Acquire settles when dirty; when clean, connect immediately.
+          // (skipPreSettle:didSettle forced a useless 1.5s pre-connect after RADIO_CLEAN
+          // — logcat ef56a1cf ~22:59:19.)
+          skipPreSettle: true,
           skipPostSettle: true,
         });
       } catch (err) {
