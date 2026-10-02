@@ -12,12 +12,15 @@ import {
   subscribePrintActivity,
   type PrintActivityEntry,
 } from "@/lib/printActivityLog";
+import {
+  getPrinterReachability,
+  isProbingAllPrinters,
+  probeAllPrinters,
+  probeOnePrinter,
+  subscribePrinterReachability,
+  type PrinterReachability,
+} from "@/lib/printerProbe";
 import { ComponentLoader } from "@/components/ui/PageLoader";
-
-type Reachability = {
-  status: "unknown" | "checking" | "ok" | "fail" | "busy";
-  detail: string;
-};
 
 export function PrinterManager() {
   const { printers, loading, addPrinter, updatePrinter, deletePrinter } = usePrinterStore();
@@ -38,11 +41,20 @@ export function PrinterManager() {
   const [scanning, setScanning] = useState(false);
   const [recentJobs, setRecentJobs] = useState<KitchenPrintJob[]>([]);
   const [activity, setActivity] = useState<PrintActivityEntry[]>(() => getPrintActivity());
-  const [reachability, setReachability] = useState<Record<string, Reachability>>({});
-  const [probingAll, setProbingAll] = useState(false);
+  const [reachability, setReachability] = useState<Record<string, PrinterReachability>>(
+    () => getPrinterReachability(),
+  );
+  const [probingAll, setProbingAll] = useState(() => isProbingAllPrinters());
 
   useEffect(() => {
     return subscribePrintActivity(() => setActivity(getPrintActivity()));
+  }, []);
+
+  useEffect(() => {
+    return subscribePrinterReachability(() => {
+      setReachability(getPrinterReachability());
+      setProbingAll(isProbingAllPrinters());
+    });
   }, []);
 
   useEffect(() => {
@@ -61,53 +73,32 @@ export function PrinterManager() {
     };
   }, []);
 
-  const probePrinter = async (printer: Printer) => {
-    setReachability((prev) => ({
-      ...prev,
-      [printer.id]: { status: "checking", detail: "Test en cours…" },
-    }));
-    const result = await printerService.verifyPrinterReachable(printer);
-    const busy =
-      !result.ok &&
-      /occupée|occupee|en cours/i.test(result.detail);
-    setReachability((prev) => ({
-      ...prev,
-      [printer.id]: {
-        status: result.ok ? "ok" : busy ? "busy" : "fail",
-        detail: result.detail,
-      },
-    }));
-    return result;
-  };
+  const probePrinter = async (printer: Printer) => probeOnePrinter(printer);
 
   const probeAll = async () => {
-    setProbingAll(true);
-    try {
-      for (const p of printers) {
-        await probePrinter(p);
-      }
-    } finally {
-      setProbingAll(false);
-    }
+    await probeAllPrinters({ enabledOnly: false });
   };
 
-  // Do NOT auto-probe on mount — probes used to steal receipt priority mid-print
-  // and mark every printer Injoignable while delaying kitchen/caisse jobs.
+  // Seed unknown rows; hub auto-probe runs from PrintQueueDaemon on open.
   useEffect(() => {
     if (loading || hubLoading || printers.length === 0) return;
     setReachability((prev) => {
       const next = { ...prev };
+      let changed = false;
       for (const p of printers) {
         if (!next[p.id]) {
           next[p.id] = {
             status: "unknown",
-            detail: "Appuyez sur Vérifier Bluetooth",
+            detail: isPrimaryHub
+              ? "Vérification Bluetooth automatique…"
+              : "Définissez cet appareil comme hub pour vérifier",
           };
+          changed = true;
         }
       }
-      return next;
+      return changed ? next : prev;
     });
-  }, [loading, hubLoading, printers]);
+  }, [loading, hubLoading, printers, isPrimaryHub]);
 
   if (loading || hubLoading) return <ComponentLoader />;
 
@@ -516,7 +507,8 @@ export function PrinterManager() {
         <div>
           <h2 className="text-xl font-bold text-foreground">Gestion des Imprimantes</h2>
           <p className="text-sm text-muted-foreground">
-            Configurez les imprimantes Bluetooth pour la caisse et la cuisine.
+            Vérification Bluetooth automatique à l&apos;ouverture du hub — le bouton reste
+            disponible pour un re-test manuel.
           </p>
         </div>
         <div className="flex items-center gap-2">

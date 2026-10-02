@@ -9,6 +9,7 @@ import {
   startPrintQueueDaemon,
   wakePrintQueueDaemon,
 } from "@/lib/printQueueDaemon";
+import { scheduleHubAutoBluetoothProbe } from "@/lib/printerProbe";
 
 let _daemonManager: RealtimeManager | null = null;
 
@@ -60,6 +61,10 @@ export function PrintQueueDaemon() {
 
     console.log("[PRINT DAEMON] Mount primary hub:", deviceId);
 
+    // Auto "Vérifier Bluetooth" on tablet open — no Admin click required.
+    // Probes wait for idle radio; delayed so the drain loop can claim first.
+    const cancelAutoProbe = scheduleHubAutoBluetoothProbe(2500);
+
     const handlePayload = (payload: PostgresPayload) => {
       if (payload.eventType === "DELETE") return;
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -87,6 +92,7 @@ export function PrintQueueDaemon() {
 
     return () => {
       console.log("[PRINT DAEMON] Unmount");
+      cancelAutoProbe();
       stop();
       void manager.destroy();
       if (_daemonManager === manager) _daemonManager = null;

@@ -22,7 +22,11 @@ import {
 } from "../components/pos/PrintQueueDaemon";
 import { PrintFailureBanner } from "../components/pos/PrintFailureBanner";
 import { useSessionStore } from "../lib/authStore";
-import { usePrintSettingsStore } from "../lib/printSettingsStore";
+import {
+  isLocalDevicePrimaryHub,
+  usePrintSettingsStore,
+} from "../lib/printSettingsStore";
+import { scheduleHubAutoBluetoothProbe } from "../lib/printerProbe";
 
 function NotFoundComponent() {
   return (
@@ -164,6 +168,10 @@ function RootComponent() {
             void getTableRealtimeManager().handleForeground();
             void getTableOrdersRealtimeManager().handleForeground();
             void getKitchenPrintRealtimeManager()?.handleForeground();
+            // Re-run Bluetooth verify when tablet comes back (hub only, cool-down inside)
+            if (isLocalDevicePrimaryHub()) {
+              scheduleHubAutoBluetoothProbe(1500);
+            }
           }
         });
       } catch {
