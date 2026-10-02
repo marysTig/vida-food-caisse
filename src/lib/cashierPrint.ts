@@ -93,6 +93,7 @@ export async function runCashierReceiptPrint(params: {
 
   wakePrintQueueDaemon();
   // #region agent log
+  console.log(`[CAISSE LATENCY] enqueued_woke · ${caisse.name} · ${label} · t=${Date.now()}`);
   fetch('http://127.0.0.1:7680/ingest/b490126b-dfa2-4a19-9733-3902cacf3768',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'c5e869'},body:JSON.stringify({sessionId:'c5e869',runId:'caisse-latency',hypothesisId:'A',location:'cashierPrint.ts:enqueue',message:'caisse_enqueued_woke',data:{printer:caisse.name,mac:mac.slice(-5),label:String(label),t:Date.now()},timestamp:Date.now()})}).catch(()=>{});
   // #endregion
   toast.success("Ticket en file d'impression", {

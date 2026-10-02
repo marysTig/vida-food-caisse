@@ -83,6 +83,27 @@ type KitchenSession = {
 let mode: RadioMode = "idle";
 let kitchenSession: KitchenSession | null = null;
 let receiptGeneration = 0;
+/** Caisse SPP kept open after receipt so next Encaisser skips ~2s reconnect. */
+let heldReceiptMac: string | null = null;
+
+function nativeIsConnected(): Promise<boolean> {
+  return new Promise((resolve) => {
+    const bs =
+      typeof window !== "undefined" ? window.bluetoothSerial : undefined;
+    if (!bs || typeof bs.isConnected !== "function") {
+      resolve(false);
+      return;
+    }
+    try {
+      bs.isConnected(
+        () => resolve(true),
+        () => resolve(false),
+      );
+    } catch {
+      resolve(false);
+    }
+  });
+}
 
 export function getRadioMode(): RadioMode {
   return mode;
@@ -95,6 +116,7 @@ export function isKitchenAborted(signal?: AbortSignal): boolean {
 /** Force native disconnect; resolves after plugin callback or cap. */
 export function forceDisconnectNative(reason: string): Promise<void> {
   return new Promise((resolve) => {
+    heldReceiptMac = null;
     if (typeof window === "undefined" || !window.bluetoothSerial) {
       resolve();
       return;
@@ -299,9 +321,50 @@ export async function nativeSendEscPos(opts: NativeSendOptions): Promise<void> {
   };
 
   throwIfAborted();
+
+  // Warm caisse socket: skip reconnect when still held on the same MAC.
+  if (skipPreSettle && skipPostSettle) {
+    const warm =
+      heldReceiptMac === macAddress && (await nativeIsConnected());
+    if (warm) {
+      btLog("SOCKET_REUSE_WARM", printerName);
+      // #region agent log
+      console.log(`[CAISSE LATENCY] reuse_warm · ${printerName}`);
+      fetch('http://127.0.0.1:7680/ingest/b490126b-dfa2-4a19-9733-3902cacf3768',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'c5e869'},body:JSON.stringify({sessionId:'c5e869',runId:'caisse-latency',hypothesisId:'E',location:'bluetoothRadio.ts:nativeSendEscPos',message:'receipt_reuse_warm',data:{printerName,mac:macAddress.slice(-5)},timestamp:Date.now()})}).catch(()=>{});
+      // #endregion
+      await new Promise<void>((resolve, reject) => {
+        const writePayload = data.buffer.slice(
+          data.byteOffset,
+          data.byteOffset + data.byteLength,
+        );
+        console.log(`[SEND START] ${printerName}`);
+        window.bluetoothSerial.write(
+          writePayload,
+          () => {
+            console.log(`[SEND COMPLETE] ${printerName}`);
+            btLog("SOCKET_WRITE_OK", `${printerName} · bytes=${data.byteLength} · warm`);
+            resolve();
+          },
+          (err: unknown) => {
+            heldReceiptMac = null;
+            btLog("SOCKET_WRITE_ERR", `${printerName} · warm · ${String(err)}`);
+            void forceDisconnectNative(`warm-write-err:${printerName}`).then(() =>
+              reject(new Error("Erreur écriture: " + err)),
+            );
+          },
+        );
+      });
+      return;
+    }
+  }
+
   if (!skipPreSettle) {
     await hardSettleRadio(`pre-connect:${printerName}`);
   } else {
+    // Leaving a different warm MAC — drop it before connecting caisse.
+    if (heldReceiptMac && heldReceiptMac !== macAddress) {
+      await forceDisconnectNative(`switch-mac:${printerName}`);
+    }
     btLog("SOCKET_PRESETTLE_SKIP", printerName);
   }
   throwIfAborted();
@@ -387,10 +450,23 @@ export async function nativeSendEscPos(opts: NativeSendOptions): Promise<void> {
               btLog("SOCKET_WRITE_OK", `${printerName} · bytes=${data.byteLength}`);
 
               void (async () => {
-                await sleep(BT_PRE_DISCONNECT_DRAIN_MS);
+                // Kitchen needs drain so the printer buffer finishes; caisse skips
+                // (logcat showed 350ms dead wait after SEND COMPLETE).
+                if (!skipPostSettle) {
+                  await sleep(BT_PRE_DISCONNECT_DRAIN_MS);
+                }
                 if (settled) return;
                 if (signal?.aborted) {
                   onAbort();
+                  return;
+                }
+                if (skipPostSettle) {
+                  // Keep caisse SPP open — next Encaisser reuses it (no ~2s reconnect).
+                  heldReceiptMac = macAddress;
+                  finish(() => {
+                    btLog("SOCKET_KEEP_WARM", printerName);
+                    resolve();
+                  });
                   return;
                 }
                 // Explicit close: await disconnect callback before settle/resolve

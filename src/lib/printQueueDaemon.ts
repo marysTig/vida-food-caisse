@@ -61,10 +61,12 @@ async function sendJobBytes(job: PrintJob, data: Uint8Array): Promise<"ok" | "ab
   if (job.job_type === "receipt") {
     const t0 = Date.now();
     // #region agent log
+    console.log(`[CAISSE LATENCY] send_begin · ${name} · job=${job.id}`);
     fetch('http://127.0.0.1:7680/ingest/b490126b-dfa2-4a19-9733-3902cacf3768',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'c5e869'},body:JSON.stringify({sessionId:'c5e869',runId:'caisse-latency',hypothesisId:'A',location:'printQueueDaemon.ts:sendJobBytes',message:'receipt_send_begin',data:{jobId:job.id,name,t:t0},timestamp:Date.now()})}).catch(()=>{});
     // #endregion
     const { release } = await acquireReceiptRadio(`daemon-receipt:${job.id}`);
     // #region agent log
+    console.log(`[CAISSE LATENCY] radio_acquired · ${name} · acquireMs=${Date.now()-t0}`);
     fetch('http://127.0.0.1:7680/ingest/b490126b-dfa2-4a19-9733-3902cacf3768',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'c5e869'},body:JSON.stringify({sessionId:'c5e869',runId:'caisse-latency',hypothesisId:'B',location:'printQueueDaemon.ts:sendJobBytes',message:'receipt_radio_acquired',data:{jobId:job.id,acquireMs:Date.now()-t0},timestamp:Date.now()})}).catch(()=>{});
     // #endregion
     try {
@@ -79,6 +81,7 @@ async function sendJobBytes(job: PrintJob, data: Uint8Array): Promise<"ok" | "ab
         skipPostSettle: true,
       });
       // #region agent log
+      console.log(`[CAISSE LATENCY] send_ok · ${name} · sendMs=${Date.now()-tSend} · totalMs=${Date.now()-t0}`);
       fetch('http://127.0.0.1:7680/ingest/b490126b-dfa2-4a19-9733-3902cacf3768',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'c5e869'},body:JSON.stringify({sessionId:'c5e869',runId:'caisse-latency',hypothesisId:'E',location:'printQueueDaemon.ts:sendJobBytes',message:'receipt_send_ok',data:{jobId:job.id,sendMs:Date.now()-tSend,totalMs:Date.now()-t0},timestamp:Date.now()})}).catch(()=>{});
       // #endregion
       lastSuccessMac = mac;
@@ -199,6 +202,7 @@ async function processJob(job: PrintJob): Promise<void> {
   console.log(`[PRINT START] ${job.printer_name}`);
   // #region agent log
   if (job.job_type === "receipt") {
+    console.log(`[CAISSE LATENCY] claimed · ${job.printer_name} · t=${Date.now()}`);
     fetch('http://127.0.0.1:7680/ingest/b490126b-dfa2-4a19-9733-3902cacf3768',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'c5e869'},body:JSON.stringify({sessionId:'c5e869',runId:'caisse-latency',hypothesisId:'A',location:'printQueueDaemon.ts:processJob',message:'receipt_claimed',data:{jobId:job.id,printer:job.printer_name,attempt:job.attempt_count+1,t:Date.now()},timestamp:Date.now()})}).catch(()=>{});
   }
   // #endregion
@@ -259,14 +263,26 @@ const MAX_ATTEMPTS_FORCE = 99;
 export function startPrintQueueDaemon(): () => void {
   let stopped = false;
   let waitResolve: (() => void) | null = null;
+  /** Set when wake arrives before waitForWake — prevents lost-wakeup (~1s caisse lag). */
+  let pendingWake = false;
 
   wakeDrain = () => {
-    waitResolve?.();
-    waitResolve = null;
+    pendingWake = true;
+    if (waitResolve) {
+      const resolve = waitResolve;
+      waitResolve = null;
+      pendingWake = false;
+      resolve();
+    }
   };
 
   const waitForWake = (ms: number) =>
     new Promise<void>((resolve) => {
+      if (pendingWake) {
+        pendingWake = false;
+        resolve();
+        return;
+      }
       waitResolve = resolve;
       setTimeout(() => {
         if (waitResolve === resolve) {
@@ -313,7 +329,9 @@ export function startPrintQueueDaemon(): () => void {
         draining = false;
       }
 
-      await waitForWake(1500);
+      // Short idle poll — wake + pendingWake handle instant enqueue; 1500ms was
+      // amplifying lost-wakeup into ~1s caisse delay (logcat 21:43:16→17).
+      await waitForWake(200);
     }
     console.log("[PRINT DAEMON] Stopped");
   };
