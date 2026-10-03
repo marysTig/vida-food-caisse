@@ -156,19 +156,34 @@ export const useSessionStore = create<SessionState>()(
     }),
     {
       name: 'pos-session-storage',
+      // localStorage so Capacitor/Android keeps the employee session after
+      // process kill. sessionStorage was wiping login on every app close.
+      // Explicit Déconnexion still clears via logoutUser → removeItem.
       storage: {
         getItem: (name) => {
           if (typeof window === 'undefined') return null;
-          const val = sessionStorage.getItem(name);
-          return val ? JSON.parse(val) : null;
+          try {
+            const val = localStorage.getItem(name);
+            return val ? JSON.parse(val) : null;
+          } catch {
+            return null;
+          }
         },
         setItem: (name, value) => {
           if (typeof window === 'undefined') return;
-          sessionStorage.setItem(name, JSON.stringify(value));
+          try {
+            localStorage.setItem(name, JSON.stringify(value));
+          } catch {
+            // Ignore quota / private mode
+          }
         },
         removeItem: (name) => {
           if (typeof window === 'undefined') return;
-          sessionStorage.removeItem(name);
+          try {
+            localStorage.removeItem(name);
+          } catch {
+            // Ignore
+          }
         },
       },
     }
