@@ -8,7 +8,7 @@ type CategoryTabsProps = {
 
 export function CategoryTabs({ active, onChange, categories }: CategoryTabsProps) {
   return (
-    <div className="flex overflow-x-auto gap-3 pb-2 [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]">
+    <div className="flex min-w-0 touch-pan-x overflow-x-auto gap-3 pb-2 overscroll-x-contain [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]">
       {categories.map((category) => (
         <button
           key={category}

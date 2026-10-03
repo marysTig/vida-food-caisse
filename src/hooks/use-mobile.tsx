@@ -17,3 +17,18 @@ export function useIsMobile() {
 
   return !!isMobile;
 }
+
+/** True on phones/tablets with touch (incl. landscape width ≥ 768px). */
+export function usePrefersCoarsePointer() {
+  const [coarse, setCoarse] = React.useState(false);
+
+  React.useEffect(() => {
+    const mq = window.matchMedia("(pointer: coarse)");
+    const onChange = () => setCoarse(mq.matches);
+    onChange();
+    mq.addEventListener("change", onChange);
+    return () => mq.removeEventListener("change", onChange);
+  }, []);
+
+  return coarse;
+}

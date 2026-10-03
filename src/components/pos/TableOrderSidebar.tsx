@@ -372,7 +372,7 @@ function ProductSelectorDesktop({
   visibleProducts, loading, onClose, onQueryChange, onCategoryChange, onProductSelect,
 }: ProductSelectorDesktopProps) {
   return (
-    <div className="flex h-full flex-col overflow-hidden">
+    <div className="flex h-full min-h-0 flex-col overflow-hidden">
       <header className="flex items-center justify-between border-b border-border bg-card px-4 py-3">
         <div>
           <div className="flex items-center gap-2">
@@ -392,7 +392,7 @@ function ProductSelectorDesktop({
       <div className="border-b border-border px-4 py-3">
         <CategoryTabs active={category} onChange={onCategoryChange} categories={allCategoryNames} />
       </div>
-      <main className="flex-1 overflow-y-auto p-4">
+      <main className="min-h-0 flex-1 overflow-y-auto p-4">
         <div className="mb-4">
           <ProductSearch value={query} onChange={onQueryChange} />
         </div>
@@ -801,7 +801,7 @@ export function TableOrderSidebar({ tableId, tableNumber, mergedIds, onClose }: 
 
   return (
     <div className="fixed inset-0 z-[100] flex justify-end bg-black/40">
-      <div className="flex h-full w-full max-w-5xl bg-background shadow-2xl" style={{ animation: 'slideInRight 180ms ease-out', willChange: 'transform' }}>
+      <div className="flex h-full min-h-0 w-full max-w-5xl bg-background shadow-2xl" style={{ animation: 'slideInRight 180ms ease-out', willChange: 'transform' }}>
 
         {/* ── DESKTOP: côte à côte ── */}
         <div className="hidden md:flex md:flex-1 md:flex-col overflow-hidden">
@@ -848,7 +848,7 @@ export function TableOrderSidebar({ tableId, tableNumber, mergedIds, onClose }: 
             Haut : catégories + produits (scrollable)
             Bas  : panier intégré (panneau accordéon)
             ══════════════════════════════════════════════════════════ */}
-        <div className="flex flex-1 flex-col overflow-hidden md:hidden">
+        <div className="flex min-h-0 flex-1 flex-col overflow-hidden md:hidden">
 
           {/* En-tête */}
           <header className="flex shrink-0 items-center justify-between border-b border-border bg-card px-4 py-3">
@@ -879,7 +879,7 @@ export function TableOrderSidebar({ tableId, tableNumber, mergedIds, onClose }: 
           </div>
 
           {/* Grille produits — zone scrollable principale */}
-          <div className="flex-1 overflow-y-auto px-4 pb-2">
+          <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 pb-2 touch-pan-y">
             {loading ? (
               <ComponentLoader />
             ) : visibleProducts.length === 0 ? (
@@ -932,10 +932,10 @@ export function TableOrderSidebar({ tableId, tableNumber, mergedIds, onClose }: 
 
             {/* Contenu du panier — accordéon */}
             {cartOpen && (
-              <div className="border-t border-border flex flex-col" style={{ maxHeight: '70dvh' }}>
+              <div className="flex min-h-0 flex-col border-t border-border" style={{ maxHeight: '70dvh' }}>
 
                 {/* Zone scrollable : articles + note + suppléments */}
-                <div className="flex-1 overflow-y-auto">
+                <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain touch-pan-y">
                   {items.length === 0 ? (
                     <div className="flex flex-col items-center gap-2 py-6 text-center">
                       <ShoppingCart className="h-8 w-8 text-muted-foreground/50" />

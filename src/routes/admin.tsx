@@ -39,7 +39,7 @@ function AdminPage() {
   }
 
   return (
-    <div className="flex h-screen w-full overflow-hidden bg-background font-sans">
+    <div className="flex h-[100dvh] w-full overflow-hidden bg-background font-sans">
 
       {/* ── SIDEBAR ── */}
       <aside
@@ -91,7 +91,7 @@ function AdminPage() {
       </aside>
 
       {/* ── MAIN CONTENT ── */}
-      <main className="flex min-w-0 flex-1 flex-col overflow-hidden">
+      <main className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
 
         {/* Top bar */}
         <header className="flex h-16 shrink-0 items-center gap-4 border-b border-border bg-card px-5">
@@ -117,8 +117,12 @@ function AdminPage() {
         </header>
 
         {/* Content */}
-        <div className="flex-1 overflow-hidden">
-          {activeTab === "menu"         && <MenuManager />}
+        <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+          {activeTab === "menu"         && (
+            <div className="flex h-full min-h-0 flex-1 flex-col overflow-hidden">
+              <MenuManager />
+            </div>
+          )}
           {activeTab === "tables"       && <TableManager />}
           {activeTab === "rapport"      && <ZReport />}
           {activeTab === "utilisateurs" && <UserManager />}

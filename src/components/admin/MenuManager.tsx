@@ -1,4 +1,5 @@
 import { useState, useRef } from "react";
+import { useIsMobile, usePrefersCoarsePointer } from "@/hooks/use-mobile";
 import { Plus, Trash2, Edit2, ImageIcon, Layers, ShoppingBag, ArrowLeft, Tag, Folder, Box, Coffee, Utensils, ChefHat, Loader2, GripVertical } from "lucide-react";
 import { ImageUploader } from "./ImageUploader";
 import { type Product } from "@/data/menu";
@@ -75,6 +76,8 @@ function useDragReorder<T extends { id: string }>(
 }
 
 export function MenuManager() {
+  const isMobile = useIsMobile();
+  const isTouchUi = isMobile || usePrefersCoarsePointer();
   const [view, setView] = useState<MenuView>("home");
   const {
     products,
@@ -198,7 +201,7 @@ export function MenuManager() {
   // ── HOME: two big 3D buttons ───────────────────────────────────
   if (view === "home") {
     return (
-      <div className="flex h-full flex-col items-center justify-center gap-10 p-8">
+      <div className="flex h-full min-h-0 flex-col items-center justify-center gap-10 overflow-y-auto overscroll-contain touch-pan-y p-8">
         <h2 className="text-2xl font-bold text-foreground">Gestion du Menu</h2>
         <div className="flex flex-col sm:flex-row gap-8">
 
@@ -273,7 +276,7 @@ export function MenuManager() {
   // ── CATEGORIES VIEW ────────────────────────────────────────────
   if (view === "categories") {
     return (
-      <div className="flex h-full flex-col gap-6 p-6 overflow-y-auto">
+      <div className="flex h-full min-h-0 flex-col gap-6 overflow-y-auto overscroll-contain touch-pan-y p-6">
         <div className="flex items-center gap-3">
           <button
             onClick={() => setView("home")}
@@ -327,7 +330,7 @@ export function MenuManager() {
         </form>
 
         {/* Drag hint */}
-        {!loading && categories.length > 1 && (
+        {!isTouchUi && !loading && categories.length > 1 && (
           <p className="flex items-center gap-1.5 text-xs text-muted-foreground -mt-3">
             <GripVertical className="h-3.5 w-3.5" />
             Glissez les cartes pour réorganiser l'ordre des catégories
@@ -341,22 +344,22 @@ export function MenuManager() {
         ) : (
           <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4">
             {categories.map(cat => {
-              const dragProps = catDrag.getProps(cat.id);
-              const isOver = catDrag.dragOverId === cat.id && catDrag.draggedId.current !== cat.id;
-              const isDragged = catDrag.draggedId.current === cat.id;
+              const dragProps = isTouchUi ? {} : catDrag.getProps(cat.id);
+              const isOver = !isTouchUi && catDrag.dragOverId === cat.id && catDrag.draggedId.current !== cat.id;
+              const isDragged = !isTouchUi && catDrag.draggedId.current === cat.id;
 
               return (
                 <div
                   key={cat.id ?? cat.name}
                   {...dragProps}
                   className={[
-                    "group relative flex flex-col gap-2 rounded-xl border bg-card p-2 cursor-grab active:cursor-grabbing transition-all duration-150 select-none",
+                    "group relative flex flex-col gap-2 rounded-xl border bg-card p-2 transition-all duration-150",
+                    isTouchUi ? "touch-pan-y" : "cursor-grab active:cursor-grabbing select-none",
                     isOver
                       ? "border-primary shadow-lg shadow-primary/20 scale-[1.02]"
                       : "border-border",
                     isDragged ? "opacity-40 scale-95" : "opacity-100",
                   ].join(" ")}
-                  style={{ touchAction: "none" }}
                 >
                   {/* Drag handle badge */}
                   <div className="absolute top-2 left-2 z-10 flex items-center justify-center rounded bg-background/80 p-1 opacity-0 group-hover:opacity-100 transition-opacity backdrop-blur-sm pointer-events-none">
@@ -402,10 +405,10 @@ export function MenuManager() {
 
   // ── PRODUCTS VIEW ──────────────────────────────────────────────
   return (
-    <div className="flex h-full flex-col gap-0 overflow-hidden bg-background">
+    <div className="flex h-full min-h-0 flex-col gap-0 overflow-hidden bg-background">
       {/* Category selector (Horizontal Row with Circles) */}
       <div className="w-full shrink-0 border-b border-border bg-card">
-        <div className="flex items-center gap-4 overflow-x-auto p-4 no-scrollbar">
+        <div className="flex min-w-0 touch-pan-x items-center gap-4 overflow-x-auto overscroll-x-contain p-4 no-scrollbar">
           <button 
             onClick={() => setView("home")} 
             className="flex shrink-0 h-16 w-16 flex-col items-center justify-center gap-1 rounded-full border-2 border-border bg-muted text-muted-foreground hover:bg-muted/80 transition-colors"
@@ -446,7 +449,7 @@ export function MenuManager() {
       </div>
 
       {/* Products grid */}
-      <div className="flex-1 flex flex-col overflow-hidden">
+      <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
         <div className="flex items-center justify-between border-b border-border bg-card px-5 py-3">
           <div className="flex items-center gap-3">
             <h3 className="font-semibold">{effectiveCategory || "—"}</h3>
@@ -469,7 +472,7 @@ export function MenuManager() {
           <p className="mx-4 mt-3 rounded-lg bg-destructive/10 px-4 py-2 text-sm text-destructive">{error}</p>
         )}
 
-        <div className="flex-1 overflow-y-auto p-4">
+        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain touch-pan-y p-4">
           {showProductForm ? (
             <ProductForm
               initialData={isEditing}
@@ -504,7 +507,7 @@ export function MenuManager() {
           ) : (
             <>
               {/* Drag hint */}
-              {filteredProducts.length > 1 && (
+              {!isTouchUi && filteredProducts.length > 1 && (
                 <p className="flex items-center gap-1.5 text-xs text-muted-foreground mb-3">
                   <GripVertical className="h-3.5 w-3.5" />
                   Glissez les cartes pour réorganiser l'ordre des produits
@@ -512,22 +515,22 @@ export function MenuManager() {
               )}
               <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-4">
                 {filteredProducts.map(prod => {
-                  const dragProps = prodDrag.getProps(prod.id);
-                  const isOver = prodDrag.dragOverId === prod.id && prodDrag.draggedId.current !== prod.id;
-                  const isDragged = prodDrag.draggedId.current === prod.id;
+                  const dragProps = isTouchUi ? {} : prodDrag.getProps(prod.id);
+                  const isOver = !isTouchUi && prodDrag.dragOverId === prod.id && prodDrag.draggedId.current !== prod.id;
+                  const isDragged = !isTouchUi && prodDrag.draggedId.current === prod.id;
 
                   return (
                     <div
                       key={prod.id}
                       {...dragProps}
                       className={[
-                        "group flex flex-col gap-3 rounded-xl border p-3 bg-card cursor-grab active:cursor-grabbing transition-all duration-150 select-none",
+                        "group flex flex-col gap-3 rounded-xl border p-3 bg-card transition-all duration-150",
+                        isTouchUi ? "touch-pan-y" : "cursor-grab active:cursor-grabbing select-none",
                         isOver
                           ? "border-primary shadow-lg shadow-primary/20 scale-[1.02]"
                           : "border-border",
                         isDragged ? "opacity-40 scale-95" : "opacity-100",
                       ].join(" ")}
-                      style={{ touchAction: "none" }}
                     >
                       <div className="relative aspect-video w-full overflow-hidden rounded-lg bg-muted">
                         {prod.image ? (
