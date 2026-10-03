@@ -21,7 +21,9 @@ import {
   getKitchenPrintRealtimeManager,
 } from "../components/pos/PrintQueueDaemon";
 import { PrintFailureBanner } from "../components/pos/PrintFailureBanner";
+import { HubForegroundSync } from "../components/pos/HubForegroundSync";
 import { useSessionStore } from "../lib/authStore";
+import { useEffectiveHubKeepActive } from "../lib/hubKeepActiveStore";
 import {
   isLocalDevicePrimaryHub,
   usePrintSettingsStore,
@@ -139,10 +141,16 @@ function RootShell({ children }: { children: ReactNode }) {
 
 function RootComponent() {
   const { queryClient } = Route.useRouteContext();
-  const currentUser = useSessionStore(s => s.currentUser);
+  const currentUser = useSessionStore((s) => s.currentUser);
   const isLoggedIn = !!currentUser;
   // Ensures print_settings loads for hub ownership (worker mounts when primary)
-  usePrintSettingsStore();
+  const { isPrimaryHub, loading: printSettingsLoading } = usePrintSettingsStore();
+  const { effective: effectiveKeepActive } = useEffectiveHubKeepActive(isPrimaryHub);
+
+  // Daemon + failure banner: logged-in (any device) OR hub with keep-active
+  const mountPrintStack =
+    !printSettingsLoading &&
+    (isLoggedIn || (isPrimaryHub && effectiveKeepActive));
 
   // ── Sync stores : ne s'initialisent QU'APRÈS le login ───────────────────────
   // Avant le login, currentUser === null → isLoggedIn === false → aucun appel
@@ -153,22 +161,26 @@ function RootComponent() {
   useGlobalSupplementsSync(isLoggedIn);
 
   // ── Lifecycle Capacitor Android : retour au foreground ──────────────────────
-  // Quand l'app revient au premier plan, on vérifie l'état des channels
-  // Realtime et on resync les données si nécessaire.
+  // Tables/orders: logged-in only. Print Realtime: also hub keep-active without login.
   useEffect(() => {
     let mounted = true;
 
     const registerForegroundListener = async () => {
       try {
         await CapacitorApp.addListener("appStateChange", ({ isActive }) => {
-          if (!mounted) return;
-          // Resync uniquement si un utilisateur est connecté
-          if (isActive && isLoggedIn) {
+          if (!mounted || !isActive) return;
+
+          const hubKeepAlive =
+            effectiveKeepActive && isLocalDevicePrimaryHub();
+
+          if (isLoggedIn) {
             console.log("[Realtime:Root] FOREGROUND — vérification des channels");
             void getTableRealtimeManager().handleForeground();
             void getTableOrdersRealtimeManager().handleForeground();
+          }
+
+          if (isLoggedIn || hubKeepAlive) {
             void getKitchenPrintRealtimeManager()?.handleForeground();
-            // Re-run Bluetooth verify when tablet comes back (hub only, cool-down inside)
             if (isLocalDevicePrimaryHub()) {
               scheduleHubAutoBluetoothProbe(1500);
             }
@@ -188,14 +200,15 @@ function RootComponent() {
         // Ignorer les erreurs si Capacitor n'est pas disponible (web)
       });
     };
-  }, [isLoggedIn]);
+  }, [isLoggedIn, effectiveKeepActive]);
 
   return (
     <QueryClientProvider client={queryClient}>
       {/* Required: nested routes render here. Removing <Outlet /> breaks all child routes. */}
       <Outlet />
-      {/* Print queue daemon (primary hub) + POS failure banner */}
-      {currentUser && (
+      <HubForegroundSync />
+      {/* Print queue daemon + failure banner (login OR hub keep-active) */}
+      {mountPrintStack && (
         <>
           <PrintQueueDaemon />
           <PrintFailureBanner />

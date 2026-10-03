@@ -5,6 +5,7 @@ import { usePrinterStore, type Printer, type PrinterType } from "@/lib/printerSt
 import { useMenuStore } from "@/lib/menuStore";
 import { printerService } from "@/lib/printerService";
 import { usePrintSettingsStore } from "@/lib/printSettingsStore";
+import { useEffectiveHubKeepActive } from "@/lib/hubKeepActiveStore";
 import { fetchRecentKitchenJobs, requeueFailedKitchenJob, type KitchenPrintJob } from "@/lib/kitchenPrintQueue";
 import { closeCircuit } from "@/lib/kitchenCircuitBreaker";
 import {
@@ -21,6 +22,7 @@ import {
   type PrinterReachability,
 } from "@/lib/printerProbe";
 import { ComponentLoader } from "@/components/ui/PageLoader";
+import { Switch } from "@/components/ui/switch";
 
 export function PrinterManager() {
   const { printers, loading, addPrinter, updatePrinter, deletePrinter } = usePrinterStore();
@@ -34,6 +36,8 @@ export function PrinterManager() {
     fallbackKitchenPrinterId,
     setFallbackPrinter,
   } = usePrintSettingsStore();
+  const { effective: hubKeepActive, setKeepActive } =
+    useEffectiveHubKeepActive(isPrimaryHub);
 
   const [editingId, setEditingId] = useState<string | null>(null);
   const [formData, setFormData] = useState<Partial<Printer>>({});
@@ -378,6 +382,42 @@ export function PrinterManager() {
           >
             Définir cet appareil comme hub
           </button>
+        </div>
+
+        <div className="mt-4 flex items-start justify-between gap-4 border-t border-border pt-3">
+          <div className="min-w-0 flex-1">
+            <p className="text-sm font-semibold text-foreground">
+              Maintenir le hub actif sur cet appareil
+            </p>
+            <p className="mt-0.5 text-[11px] text-muted-foreground">
+              Le hub continue d&apos;imprimer sans connexion employé. Sur Android, une
+              notification « Impression cuisine — hub actif » reste visible.
+            </p>
+            {!isPrimaryHub && (
+              <p className="mt-1 text-[11px] font-medium text-amber-600 dark:text-amber-400">
+                Définir cet appareil comme hub d&apos;abord
+              </p>
+            )}
+          </div>
+          <Switch
+            checked={hubKeepActive}
+            disabled={!isPrimaryHub}
+            onCheckedChange={(on) => {
+              setKeepActive(on);
+              if (on) {
+                toast.message("Hub maintenu actif", {
+                  description:
+                    "Sur Android, désactivez l'optimisation batterie pour cette app si les impressions s'arrêtent en arrière-plan.",
+                });
+              } else {
+                toast.message("Hub actif désactivé", {
+                  description:
+                    "L'impression cuisine nécessite une connexion employé sur cet appareil.",
+                });
+              }
+            }}
+            aria-label="Maintenir le hub actif sur cet appareil"
+          />
         </div>
 
         <div className="mt-4 border-t border-border pt-3">
