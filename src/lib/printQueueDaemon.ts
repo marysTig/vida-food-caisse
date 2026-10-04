@@ -1,19 +1,23 @@
 /**
  * PrintQueueDaemon — single-flight Bluetooth drain for kitchen + receipt.
- * Receipt priority, 4s inter-MAC gap, 3× retry / 2.5s, auto-consol once.
+ * Receipt priority; MAC cooldowns via bluetoothCoordinator; watchdog self-heal.
  */
 
 import { toast } from "sonner";
 import {
   KitchenAbortedError,
-  acquireKitchenRadio,
-  acquireReceiptRadio,
-  forceDisconnectNative,
+  forceResetRadioState,
+  getLastIoProgressAt,
   hardSettleRadio,
   markRadioNeedsSettle,
-  nativeSendEscPos,
   sleep,
+  touchIoProgress,
+  BT_OP_TIMEOUT_MS,
 } from "@/lib/bluetoothRadio";
+import {
+  runProductionKitchen,
+  runProductionReceipt,
+} from "@/lib/bluetoothCoordinator";
 import { base64ToUint8 } from "@/lib/escposTickets";
 import {
   claimNextPrintJob,
@@ -21,6 +25,7 @@ import {
   hasPendingReceiptJob,
   markPrintJobDone,
   patchOrderKitchenFingerprints,
+  reclaimPrintingJobsForThisDevice,
   reclaimStalePrintingJobs,
   requeueInterruptedJob,
   schedulePrintJobRetry,
@@ -32,7 +37,10 @@ import { getLocalPrintDeviceId } from "@/lib/printDevice";
 import { isLocalDevicePrimaryHub } from "@/lib/printSettingsStore";
 import { logPrintActivity, updatePrintActivity } from "@/lib/printActivityLog";
 
-let lastSuccessMac: string | null = null;
+/** Stall budget = connect/write timeout + margin before force-reset. */
+export const WATCHDOG_MARGIN_MS = 5000;
+const WATCHDOG_POLL_MS = 1000;
+
 let draining = false;
 let currentKitchenJobId: string | null = null;
 let kitchenAbort: AbortController | null = null;
@@ -51,53 +59,32 @@ export function wakePrintQueueDaemon() {
   void (async () => {
     if (!currentKitchenJobId || !kitchenAbort) return;
     if (await hasPendingReceiptJob()) {
-      console.log("[PRINT DAEMON] Receipt pending — aborting kitchen job", currentKitchenJobId);
+      console.log(
+        "[PRINT DAEMON] Receipt pending — aborting kitchen job",
+        currentKitchenJobId,
+      );
       markRadioNeedsSettle(`wake-abort:${currentKitchenJobId}`);
       kitchenAbort.abort();
     }
   })();
 }
 
-async function sendJobBytes(job: PrintJob, data: Uint8Array): Promise<"ok" | "aborted"> {
+async function sendJobBytes(
+  job: PrintJob,
+  data: Uint8Array,
+): Promise<"ok" | "aborted"> {
   const mac = (job.mac_address ?? "").trim();
   const name = job.printer_name ?? "imprimante";
   if (!mac) throw new Error("Adresse MAC manquante");
 
   if (job.job_type === "receipt") {
-    const { release } = await acquireReceiptRadio(`daemon-receipt:${job.id}`);
-    try {
-      try {
-        await nativeSendEscPos({
-          priority: "receipt",
-          printerName: name,
-          macAddress: mac,
-          data,
-          // Acquire already hard-settles when the radio is dirty.
-          skipPreSettle: true,
-          skipPostSettle: true,
-        });
-      } catch (err) {
-        // One local retry after hard settle (avoids multi-minute DB retry loops).
-        console.warn(
-          `[PRINT DAEMON] receipt connect fail, local retry after settle:`,
-          err instanceof Error ? err.message : err,
-        );
-        markRadioNeedsSettle("receipt-local-retry");
-        await hardSettleRadio(`receipt-retry:${name}`);
-        await nativeSendEscPos({
-          priority: "receipt",
-          printerName: name,
-          macAddress: mac,
-          data,
-          skipPreSettle: true,
-          skipPostSettle: true,
-        });
-      }
-      lastSuccessMac = mac;
-      return "ok";
-    } finally {
-      release();
-    }
+    await runProductionReceipt({
+      jobId: job.id,
+      printerName: name,
+      macAddress: mac,
+      data,
+    });
+    return "ok";
   }
 
   // Kitchen
@@ -105,55 +92,79 @@ async function sendJobBytes(job: PrintJob, data: Uint8Array): Promise<"ok" | "ab
   kitchenAbort = ac;
   currentKitchenJobId = job.id;
 
-  let signal: AbortSignal;
-  let release: () => void;
-  try {
-    const session = await acquireKitchenRadio(`daemon-kitchen:${job.id}`);
-    signal = session.signal;
-    release = session.release;
-  } catch (err) {
-    kitchenAbort = null;
-    currentKitchenJobId = null;
-    if (err instanceof KitchenAbortedError) return "aborted";
-    throw err;
-  }
-
-  const combined = new AbortController();
-  const forward = () => {
-    if (!combined.signal.aborted) combined.abort();
-    void forceDisconnectNative(`kitchen-abort:${name}`);
-  };
-  signal.addEventListener("abort", forward);
-  ac.signal.addEventListener("abort", forward);
-
   try {
     if (await hasPendingReceiptJob()) {
-      throw new KitchenAbortedError();
+      return "aborted";
     }
-    await nativeSendEscPos({
-      priority: "kitchen",
-      signal: combined.signal,
+    return await runProductionKitchen({
+      jobId: job.id,
       printerName: name,
       macAddress: mac,
       data,
+      abortSignal: ac.signal,
     });
-    lastSuccessMac = mac;
-    return "ok";
   } catch (err) {
-    if (
-      err instanceof KitchenAbortedError ||
-      ac.signal.aborted ||
-      combined.signal.aborted
-    ) {
+    if (err instanceof KitchenAbortedError || ac.signal.aborted) {
       return "aborted";
     }
     throw err;
   } finally {
-    release();
     kitchenAbort = null;
     currentKitchenJobId = null;
-    signal.removeEventListener("abort", forward);
-    ac.signal.removeEventListener("abort", forward);
+  }
+}
+
+/**
+ * Run sendJobBytes with a watchdog: if no I/O progress for
+ * BT_OP_TIMEOUT_MS + margin, force-reset radio and requeue without attempt++.
+ */
+async function sendJobBytesWithWatchdog(
+  job: PrintJob,
+  data: Uint8Array,
+): Promise<"ok" | "aborted" | "watchdog"> {
+  touchIoProgress(`job-start:${job.id}`);
+  let settled = false;
+  let watchdogFired = false;
+
+  const watchdog = (async () => {
+    while (!settled) {
+      await sleep(WATCHDOG_POLL_MS);
+      if (settled) return;
+      const last = getLastIoProgressAt();
+      const idleFor = Date.now() - (last || Date.now());
+      if (idleFor > BT_OP_TIMEOUT_MS + WATCHDOG_MARGIN_MS) {
+        watchdogFired = true;
+        console.error(
+          `[PRINT DAEMON] WATCHDOG · job ${job.id} · idle ${idleFor}ms · ${job.printer_name}`,
+        );
+        try {
+          await forceResetRadioState(`watchdog:${job.id}`);
+        } catch (e) {
+          console.warn("[PRINT DAEMON] watchdog reset failed", e);
+        }
+        if (kitchenAbort) {
+          try {
+            kitchenAbort.abort();
+          } catch {
+            /* ignore */
+          }
+        }
+        return;
+      }
+    }
+  })();
+
+  try {
+    const result = await sendJobBytes(job, data);
+    settled = true;
+    await watchdog;
+    if (watchdogFired) return "watchdog";
+    return result;
+  } catch (err) {
+    settled = true;
+    await watchdog;
+    if (watchdogFired) return "watchdog";
+    throw err;
   }
 }
 
@@ -170,7 +181,8 @@ async function tryAutoConsol(failedJob: PrintJob): Promise<void> {
   // Prefer the other of plaque/four relative to failed printer
   const failedPrinter = printers.find((p) => p.id === failedJob.printer_id);
   const preferred =
-    others.find((p) => failedPrinter && p.type !== failedPrinter.type) ?? others[0];
+    others.find((p) => failedPrinter && p.type !== failedPrinter.type) ??
+    others[0];
   if (!preferred) return;
 
   const result = await enqueueConsolKitchenJob({
@@ -210,7 +222,18 @@ async function processJob(job: PrintJob): Promise<void> {
   console.log(`[PRINT START] ${job.printer_name}`);
 
   try {
-    const result = await sendJobBytes(job, data);
+    const result = await sendJobBytesWithWatchdog(job, data);
+    if (result === "watchdog") {
+      updatePrintActivity(activityId, {
+        status: "error",
+        detail: "Watchdog — radio réinitialisée",
+      });
+      await requeueInterruptedJob(job.id);
+      console.log(`[PRINT DAEMON] Requeued after watchdog ${job.id}`);
+      await sleep(2000);
+      wakePrintQueueDaemon();
+      return;
+    }
     if (result === "aborted") {
       updatePrintActivity(activityId, {
         status: "error",
@@ -336,6 +359,8 @@ export function startPrintQueueDaemon(): () => void {
           } catch {
             /* ignore */
           }
+          // Immediate reclaim of this device's in-flight jobs (not 2-min stale only).
+          await reclaimPrintingJobsForThisDevice(getLocalPrintDeviceId());
         }
         await reclaimStalePrintingJobs(getLocalPrintDeviceId());
 

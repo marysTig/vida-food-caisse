@@ -23,7 +23,6 @@ import {
 import { PrintFailureBanner } from "../components/pos/PrintFailureBanner";
 import { HubForegroundSync } from "../components/pos/HubForegroundSync";
 import { useSessionStore } from "../lib/authStore";
-import { useEffectiveHubKeepActive } from "../lib/hubKeepActiveStore";
 import {
   isLocalDevicePrimaryHub,
   usePrintSettingsStore,
@@ -145,12 +144,10 @@ function RootComponent() {
   const isLoggedIn = !!currentUser;
   // Ensures print_settings loads for hub ownership (worker mounts when primary)
   const { isPrimaryHub, loading: printSettingsLoading } = usePrintSettingsStore();
-  const { effective: effectiveKeepActive } = useEffectiveHubKeepActive(isPrimaryHub);
 
-  // Daemon + failure banner: logged-in (any device) OR hub with keep-active
+  // Daemon + failure banner: logged-in (any device) OR primary hub (always, even logged out)
   const mountPrintStack =
-    !printSettingsLoading &&
-    (isLoggedIn || (isPrimaryHub && effectiveKeepActive));
+    !printSettingsLoading && (isLoggedIn || isPrimaryHub);
 
   // ── Sync stores : ne s'initialisent QU'APRÈS le login ───────────────────────
   // Avant le login, currentUser === null → isLoggedIn === false → aucun appel
@@ -161,7 +158,7 @@ function RootComponent() {
   useGlobalSupplementsSync(isLoggedIn);
 
   // ── Lifecycle Capacitor Android : retour au foreground ──────────────────────
-  // Tables/orders: logged-in only. Print Realtime: also hub keep-active without login.
+  // Tables/orders: logged-in only. Print Realtime: primary hub always (session-decoupled).
   useEffect(() => {
     let mounted = true;
 
@@ -170,8 +167,7 @@ function RootComponent() {
         await CapacitorApp.addListener("appStateChange", ({ isActive }) => {
           if (!mounted || !isActive) return;
 
-          const hubKeepAlive =
-            effectiveKeepActive && isLocalDevicePrimaryHub();
+          const isHub = isLocalDevicePrimaryHub();
 
           if (isLoggedIn) {
             console.log("[Realtime:Root] FOREGROUND — vérification des channels");
@@ -179,9 +175,10 @@ function RootComponent() {
             void getTableOrdersRealtimeManager().handleForeground();
           }
 
-          if (isLoggedIn || hubKeepAlive) {
+          if (isLoggedIn || isHub) {
             void getKitchenPrintRealtimeManager()?.handleForeground();
-            if (isLocalDevicePrimaryHub()) {
+            if (isHub) {
+              // Never race production — probeAllPrinters defers when queue busy
               scheduleHubAutoBluetoothProbe(1500);
             }
           }
@@ -200,14 +197,14 @@ function RootComponent() {
         // Ignorer les erreurs si Capacitor n'est pas disponible (web)
       });
     };
-  }, [isLoggedIn, effectiveKeepActive]);
+  }, [isLoggedIn, isPrimaryHub]);
 
   return (
     <QueryClientProvider client={queryClient}>
       {/* Required: nested routes render here. Removing <Outlet /> breaks all child routes. */}
       <Outlet />
       <HubForegroundSync />
-      {/* Print queue daemon + failure banner (login OR hub keep-active) */}
+      {/* Print queue daemon + failure banner (login OR primary hub) */}
       {mountPrintStack && (
         <>
           <PrintQueueDaemon />

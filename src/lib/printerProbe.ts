@@ -1,11 +1,12 @@
 /**
  * Shared Bluetooth reachability probes for Admin UI + hub auto-check on open.
- * Probes wait for idle radio (acquireProbeRadio) — never steal kitchen/receipt.
+ * Probes go through bluetoothCoordinator — deferred while print_jobs busy.
  */
 
+import { drainDeferredProbes, onCoordinatorIdle } from "@/lib/bluetoothCoordinator";
+import { hasActivePrintJobs } from "@/lib/kitchenPrintQueue";
 import { printerService } from "@/lib/printerService";
 import { getPrintersFromStore, type Printer } from "@/lib/printerStore";
-import { supabase } from "@/lib/supabase";
 
 export type PrinterReachability = {
   status: "unknown" | "checking" | "ok" | "fail" | "busy";
@@ -16,6 +17,10 @@ let reachability: Record<string, PrinterReachability> = {};
 const listeners = new Set<() => void>();
 let probing = false;
 let lastAutoProbeAt = 0;
+/** Printers waiting because production queue was busy. */
+let deferredProbePrinters: Printer[] = [];
+let deferredRetryTimer: ReturnType<typeof setTimeout> | null = null;
+let unsubIdle: (() => void) | null = null;
 
 function emit() {
   for (const l of listeners) l();
@@ -79,7 +84,7 @@ export async function probeOnePrinter(printer: Printer): Promise<{
   setOne(printer.id, { status: "checking", detail: "Test en cours…" });
   const result = await printerService.verifyPrinterReachable(printer);
   const busy =
-    !result.ok && /occupée|occupee|en cours/i.test(result.detail);
+    !result.ok && /occupée|occupee|en cours|file|busy/i.test(result.detail);
   setOne(printer.id, {
     status: result.ok ? "ok" : busy ? "busy" : "fail",
     detail: result.detail,
@@ -87,44 +92,100 @@ export async function probeOnePrinter(printer: Printer): Promise<{
   return result;
 }
 
-/**
- * Probe all enabled printers with a MAC.
- * Safe to call on hub open — waits for idle radio between printers.
- */
-async function hasActivePrintJobs(): Promise<boolean> {
-  const { data } = await supabase
-    .from("print_jobs")
-    .select("id")
-    .in("status", ["pending", "printing"])
-    .limit(1);
-  return !!(data && data.length > 0);
+function markPrintersBusy(printers: Printer[]): void {
+  for (const p of printers) {
+    setOne(p.id, {
+      status: "busy",
+      detail: "File d'impression active — probe différé",
+    });
+  }
+}
+
+function scheduleDeferredProbeRetry(): void {
+  if (deferredRetryTimer) return;
+  deferredRetryTimer = setTimeout(() => {
+    deferredRetryTimer = null;
+    if (deferredProbePrinters.length === 0) return;
+    console.log("[BT PROBE] retry deferred probes");
+    void probeAllPrinters({
+      skipIfBusyQueue: true,
+      forceDeferIfQueueBusy: true,
+      _fromDeferred: true,
+    });
+  }, 30_000);
+
+  if (!unsubIdle) {
+    unsubIdle = onCoordinatorIdle(() => {
+      if (deferredProbePrinters.length === 0) return;
+      drainDeferredProbes();
+      void probeAllPrinters({
+        skipIfBusyQueue: true,
+        forceDeferIfQueueBusy: true,
+        _fromDeferred: true,
+      });
+    });
+  }
 }
 
 export async function probeAllPrinters(options?: {
   /** Only enabled printers (default true). */
   enabledOnly?: boolean;
-  /** When true, skip if queue has pending/printing jobs. */
+  /** When true, skip/defer if queue has pending/printing jobs. */
   skipIfBusyQueue?: boolean;
+  /** When true, mark busy + retry later instead of silent skip. */
+  forceDeferIfQueueBusy?: boolean;
+  /** @internal */
+  _fromDeferred?: boolean;
 }): Promise<void> {
   if (probing) {
     console.log("[BT PROBE] already running — skip");
     return;
   }
+
+  const enabledOnly = options?.enabledOnly !== false;
+  const candidates = getPrintersFromStore().filter(
+    (p) =>
+      (!enabledOnly || p.enabled) && (p.mac_address ?? "").trim() !== "",
+  );
+
   if (options?.skipIfBusyQueue !== false && (await hasActivePrintJobs())) {
-    console.log("[BT PROBE] skip — print_jobs pending/printing");
+    console.log("[BT PROBE] defer — print_jobs pending/printing");
+    if (options?.forceDeferIfQueueBusy !== false) {
+      markPrintersBusy(candidates);
+      // Merge into deferred list
+      const byId = new Map(deferredProbePrinters.map((p) => [p.id, p]));
+      for (const p of candidates) byId.set(p.id, p);
+      deferredProbePrinters = [...byId.values()];
+      scheduleDeferredProbeRetry();
+      drainDeferredProbes();
+    }
     return;
   }
+
   probing = true;
   emit();
   try {
-    const enabledOnly = options?.enabledOnly !== false;
     await ensureBluetoothEnabled();
-    const printers = getPrintersFromStore().filter(
-      (p) =>
-        (!enabledOnly || p.enabled) && (p.mac_address ?? "").trim() !== "",
-    );
+    const printers = options?._fromDeferred
+      ? deferredProbePrinters.splice(0, deferredProbePrinters.length)
+      : candidates;
+    if (printers.length === 0) {
+      console.log("[BT PROBE] nothing to probe");
+      return;
+    }
     console.log("[BT PROBE] start", { count: printers.length });
     for (const p of printers) {
+      // Re-check between printers — production may have started
+      if (await hasActivePrintJobs()) {
+        console.log("[BT PROBE] pause mid-run — queue busy");
+        const remaining = printers.slice(printers.indexOf(p));
+        markPrintersBusy(remaining);
+        const byId = new Map(deferredProbePrinters.map((x) => [x.id, x]));
+        for (const r of remaining) byId.set(r.id, r);
+        deferredProbePrinters = [...byId.values()];
+        scheduleDeferredProbeRetry();
+        break;
+      }
       await probeOnePrinter(p);
     }
     lastAutoProbeAt = Date.now();
@@ -137,6 +198,7 @@ export async function probeAllPrinters(options?: {
 
 /**
  * Auto-run once per app session (or after cool-down) when this device is hub.
+ * Never races production — defers when print_jobs busy.
  */
 export function scheduleHubAutoBluetoothProbe(delayMs = 4000): () => void {
   let cancelled = false;
@@ -147,7 +209,10 @@ export function scheduleHubAutoBluetoothProbe(delayMs = 4000): () => void {
       console.log("[BT PROBE] skip auto — recent probe");
       return;
     }
-    void probeAllPrinters({ skipIfBusyQueue: true });
+    void probeAllPrinters({
+      skipIfBusyQueue: true,
+      forceDeferIfQueueBusy: true,
+    });
   }, delayMs);
   return () => {
     cancelled = true;

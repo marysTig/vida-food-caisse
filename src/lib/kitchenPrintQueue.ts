@@ -547,6 +547,57 @@ export async function hasPendingReceiptJob(): Promise<boolean> {
   return !!(data && data.length > 0);
 }
 
+/** True when any production job is pending or mid-print (blocks Admin probes). */
+export async function hasActivePrintJobs(): Promise<boolean> {
+  const { data } = await supabase
+    .from("print_jobs")
+    .select("id")
+    .in("status", ["pending", "printing"])
+    .limit(1);
+  return !!(data && data.length > 0);
+}
+
+/**
+ * Immediately reclaim all `printing` jobs claimed by this device (daemon restart).
+ * Does not wait for STALE_PRINTING_MS — used on hub bootstrap.
+ */
+export async function reclaimPrintingJobsForThisDevice(
+  deviceId: string = getLocalPrintDeviceId(),
+): Promise<PrintJob[]> {
+  const { data: rows, error } = await supabase
+    .from("print_jobs")
+    .select("*")
+    .eq("status", "printing")
+    .eq("claimed_by_device_id", deviceId);
+
+  if (error || !rows?.length) return [];
+  const claimed: PrintJob[] = [];
+  const now = new Date().toISOString();
+  for (const row of rows) {
+    const { data, error: updErr } = await supabase
+      .from("print_jobs")
+      .update({
+        status: "pending",
+        claimed_by_device_id: null,
+        next_attempt_at: now,
+        updated_at: now,
+        error: "Reprise après redémarrage hub",
+      })
+      .eq("id", (row as { id: string }).id)
+      .eq("status", "printing")
+      .eq("claimed_by_device_id", deviceId)
+      .select("*")
+      .maybeSingle();
+    if (!updErr && data) claimed.push(mapJobRow(data));
+  }
+  if (claimed.length > 0) {
+    console.log(
+      `[print_jobs] reclaimed ${claimed.length} printing job(s) for device`,
+    );
+  }
+  return claimed;
+}
+
 export async function reclaimStalePrintingJobs(
   deviceId: string = getLocalPrintDeviceId(),
 ): Promise<PrintJob[]> {

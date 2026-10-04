@@ -90,9 +90,28 @@ let receiptGeneration = 0;
  */
 let radioNeedsSettle = false;
 
+/** Last I/O progress timestamp for the print-daemon watchdog. */
+let lastIoProgressAt = 0;
+let lastIoProgressPhase = "idle";
+
 export function markRadioNeedsSettle(reason: string): void {
   radioNeedsSettle = true;
   btLog("RADIO_DIRTY", reason);
+}
+
+/** Record I/O progress so the daemon watchdog does not fire during healthy ops. */
+export function touchIoProgress(phase: string): void {
+  lastIoProgressAt = Date.now();
+  lastIoProgressPhase = phase;
+  btLog("IO_PROGRESS", phase);
+}
+
+export function getLastIoProgressAt(): number {
+  return lastIoProgressAt;
+}
+
+export function getLastIoProgressPhase(): string {
+  return lastIoProgressPhase;
 }
 
 export function getRadioMode(): RadioMode {
@@ -157,6 +176,32 @@ export async function hardSettleRadio(label: string): Promise<void> {
   // needsSettle=false after hardSettle, so caisse skipped settle and hung 20s.
   // Cleared only after a successful write (markRadioClean).
   btLog("SOCKET_SETTLE_DONE", label);
+}
+
+/**
+ * Abort kitchen, force idle mode, disconnect + hard settle.
+ * Used by the print-daemon watchdog when a job stalls with no I/O progress.
+ */
+export async function forceResetRadioState(reason: string): Promise<void> {
+  btLog("RADIO_FORCE_RESET", reason);
+  if (kitchenSession) {
+    try {
+      kitchenSession.abortController.abort();
+    } catch {
+      /* ignore */
+    }
+    try {
+      kitchenSession.release();
+    } catch {
+      /* ignore */
+    }
+    kitchenSession = null;
+  }
+  mode = "idle";
+  receiptGeneration += 1;
+  markRadioNeedsSettle(reason);
+  await hardSettleRadio(`force-reset:${reason}`);
+  touchIoProgress(`reset:${reason}`);
 }
 
 /** Call after a successful connect+write — radio is proven healthy. */
@@ -333,6 +378,7 @@ export async function nativeSendEscPos(opts: NativeSendOptions): Promise<void> {
   };
 
   throwIfAborted();
+  touchIoProgress(`pre-send:${printerName}`);
   if (!skipPreSettle) {
     await hardSettleRadio(`pre-connect:${printerName}`);
   } else {
@@ -382,6 +428,7 @@ export async function nativeSendEscPos(opts: NativeSendOptions): Promise<void> {
 
     const doConnect = () => {
       console.log(`[CONNECT START] ${printerName}`);
+      touchIoProgress(`connect-start:${printerName}`);
       btLog("SOCKET_OPEN", `${printerName} · ${macAddress}`);
       void nativeConnect(macAddress, printerName)
         .then(() => {
@@ -395,6 +442,7 @@ export async function nativeSendEscPos(opts: NativeSendOptions): Promise<void> {
             return;
           }
           console.log(`[CONNECTED] ${printerName}`);
+          touchIoProgress(`connected:${printerName}`);
           btLog("SOCKET_OPEN_OK", `${printerName} · bytes=${data.byteLength}`);
 
           // Critical: use a precise ArrayBuffer slice — data.buffer alone can be
@@ -405,6 +453,7 @@ export async function nativeSendEscPos(opts: NativeSendOptions): Promise<void> {
           );
 
           console.log(`[SEND START] ${printerName}`);
+          touchIoProgress(`write-start:${printerName}`);
           window.bluetoothSerial.write(
             writePayload,
             () => {
@@ -418,6 +467,7 @@ export async function nativeSendEscPos(opts: NativeSendOptions): Promise<void> {
                 return;
               }
               console.log(`[SEND COMPLETE] ${printerName}`);
+              touchIoProgress(`write-ok:${printerName}`);
               btLog("SOCKET_WRITE_OK", `${printerName} · bytes=${data.byteLength}`);
 
               void (async () => {
@@ -434,9 +484,11 @@ export async function nativeSendEscPos(opts: NativeSendOptions): Promise<void> {
                 // Always disconnect — keep-warm caused "Device connection was lost"
                 // on the next connect/probe (logcat 21:49:05 / 21:50:23).
                 console.log(`[DISCONNECT START] ${printerName}`);
+                touchIoProgress(`disconnect-start:${printerName}`);
                 btLog("SOCKET_CLOSE", `${printerName} · after-write-flush`);
                 await forceDisconnectNative(`after-write:${printerName}`);
                 console.log(`[DISCONNECTED] ${printerName}`);
+                touchIoProgress(`disconnected:${printerName}`);
                 // Kitchen → other MAC must settle; receipt may mark clean in daemon.
                 if (opts.priority === "receipt") {
                   markRadioClean(`receipt-ok:${printerName}`);

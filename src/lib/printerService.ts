@@ -2,16 +2,15 @@ import { type GlobalSupplement } from "@/lib/globalSupplementsStore";
 import { type Printer } from "@/lib/printerStore";
 import { type CartItem } from "@/lib/cart";
 import {
-  acquireKitchenRadio,
-  acquireProbeRadio,
-  acquireReceiptRadio,
   KitchenAbortedError,
-  nativeConnect,
-  nativeSendEscPos,
   getRadioMode,
-  hardSettleRadio,
-  BT_OP_TIMEOUT_MS,
 } from "@/lib/bluetoothRadio";
+import {
+  runAdminTestPrint,
+  runProductionKitchen,
+  runProductionReceipt,
+  runProbeConnect,
+} from "@/lib/bluetoothCoordinator";
 import { openCircuit } from "@/lib/kitchenCircuitBreaker";
 import {
   buildKitchenEscPos,
@@ -60,7 +59,7 @@ async function sendWebBluetooth(printerId: string, data: Uint8Array): Promise<vo
 }
 
 /**
- * Kitchen path — cancellable; never used for receipts.
+ * Kitchen path — via bluetoothCoordinator (single entry-point).
  * Opens circuit breaker on MAC failure (not on receipt preempt abort).
  */
 async function sendKitchenNative(
@@ -70,15 +69,18 @@ async function sendKitchenNative(
   if (!printer.mac_address) {
     throw new Error("Adresse MAC non configurée pour " + printer.name);
   }
-  const { signal, release } = await acquireKitchenRadio(printer.name);
+  const ac = new AbortController();
   try {
-    await nativeSendEscPos({
-      priority: "kitchen",
-      signal,
+    const result = await runProductionKitchen({
+      jobId: `direct-kitchen:${printer.id}:${Date.now()}`,
       printerName: printer.name,
       macAddress: printer.mac_address,
       data,
+      abortSignal: ac.signal,
     });
+    if (result === "aborted") {
+      throw new KitchenAbortedError();
+    }
   } catch (err) {
     if (!(err instanceof KitchenAbortedError)) {
       openCircuit(
@@ -87,13 +89,11 @@ async function sendKitchenNative(
       );
     }
     throw err;
-  } finally {
-    release();
   }
 }
 
 /**
- * Receipt path — preempts kitchen, never waits on kitchen mutex.
+ * Receipt path — via bluetoothCoordinator (single entry-point).
  */
 async function sendReceiptNative(
   printer: Printer,
@@ -102,18 +102,12 @@ async function sendReceiptNative(
   if (!printer.mac_address?.trim()) {
     throw new Error("Adresse MAC non configurée pour " + printer.name);
   }
-  const { release, didSettle } = await acquireReceiptRadio(printer.name);
-  try {
-    await nativeSendEscPos({
-      priority: "receipt",
-      printerName: printer.name,
-      macAddress: printer.mac_address.trim(),
-      data,
-      skipPreSettle: didSettle,
-    });
-  } finally {
-    release();
-  }
+  await runProductionReceipt({
+    jobId: `direct-receipt:${printer.id}:${Date.now()}`,
+    printerName: printer.name,
+    macAddress: printer.mac_address.trim(),
+    data,
+  });
 }
 
 export const printerService = {
@@ -142,18 +136,11 @@ export const printerService = {
       if (!printer.mac_address) {
         throw new Error("Adresse MAC manquante. Veuillez d'abord l'associer.");
       }
-      // Ping with receipt priority so admin never queues behind kitchen
-      const { release } = await acquireReceiptRadio(`ping:${printer.name}`);
-      try {
-        await nativeSendEscPos({
-          priority: "receipt",
-          printerName: printer.name,
-          macAddress: printer.mac_address,
-          data: new TextEncoder().encode(INIT),
-        });
-      } finally {
-        release();
-      }
+      // Ping via coordinator (serialized with production jobs)
+      await runAdminTestPrint({
+        printer,
+        data: new TextEncoder().encode(INIT),
+      });
       return;
     }
 
@@ -211,7 +198,7 @@ export const printerService = {
 
   /**
    * Real Bluetooth reachability check (connect ping + mandatory disconnect).
-   * Does not leave the socket open.
+   * Routed through bluetoothCoordinator — deferred while print_jobs busy.
    */
   async verifyPrinterReachable(printer: Printer): Promise<{
     ok: boolean;
@@ -228,70 +215,7 @@ export const printerService = {
     if (!mac) {
       return { ok: false, detail: "Adresse MAC manquante" };
     }
-
-    // Wait for idle — never preempt live kitchen/receipt jobs (was causing Injoignable + late prints)
-    let release: (() => void) | null = null;
-    try {
-      const session = await acquireProbeRadio(`probe:${printer.name}`);
-      release = session.release;
-      await new Promise<void>((resolve, reject) => {
-        let done = false;
-        const finish = (fn: () => void) => {
-          if (done) return;
-          done = true;
-          clearTimeout(t);
-          fn();
-        };
-        const t = setTimeout(() => {
-          finish(() => {
-            // Must fully kill native ConnectThread before next printer probe
-            void (async () => {
-              try {
-                await hardSettleRadio(`probe-timeout:${printer.name}`);
-              } catch {
-                /* ignore */
-              }
-              reject(
-                new Error(
-                  `Timeout ping Bluetooth (${BT_OP_TIMEOUT_MS / 1000}s)`,
-                ),
-              );
-            })();
-          });
-        }, BT_OP_TIMEOUT_MS);
-
-        window.bluetoothSerial.isEnabled(
-          () => {
-            console.log(`[BT] SOCKET_OPEN · probe · ${printer.name} · ${mac}`);
-            void nativeConnect(mac, `probe:${printer.name}`)
-              .then(() => {
-                console.log(`[BT] SOCKET_OPEN_OK · probe · ${printer.name}`);
-                void hardSettleRadio(`probe-ok:${printer.name}`).then(() =>
-                  finish(() => resolve()),
-                );
-              })
-              .catch((err: unknown) => {
-                console.log(`[BT] SOCKET_OPEN_ERR · probe · ${String(err)}`);
-                void hardSettleRadio(`probe-err:${printer.name}`).then(() =>
-                  finish(() =>
-                    reject(new Error("Connexion impossible: " + String(err))),
-                  ),
-                );
-              });
-          },
-          () =>
-            finish(() =>
-              reject(new Error("Bluetooth désactivé sur la tablette")),
-            ),
-        );
-      });
-      return { ok: true, detail: "Joignable (ping OK)" };
-    } catch (err: unknown) {
-      const detail = err instanceof Error ? err.message : String(err);
-      return { ok: false, detail };
-    } finally {
-      release?.();
-    }
+    return runProbeConnect(printer);
   },
 
   encodeText(text: string): Uint8Array {
@@ -316,8 +240,7 @@ export const printerService = {
 
     const data = this.encodeText(ticket);
     if (this.isNativePlatform()) {
-      // Admin test uses receipt priority (preempt kitchen)
-      await sendReceiptNative(printer, data);
+      await runAdminTestPrint({ printer, data });
     } else {
       await sendWebBluetooth(printer.id, data);
     }
