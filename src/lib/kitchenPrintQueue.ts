@@ -27,7 +27,7 @@ export const MAX_PRINT_ATTEMPTS = 3;
 export const RETRY_BACKOFF_MS = 2500;
 export const RECEIPT_RETRY_BACKOFF_MS = 450;
 /** 2-kitchen BT profile — MAC handoff gap (native EscPosBluetoothPrinter). */
-export const INTER_PRINTER_GAP_MS = 900;
+export const INTER_PRINTER_GAP_MS = 400;
 /** Short cool-down when caisse switches MAC (not the full kitchen gap). */
 export const RECEIPT_MAC_COOLDOWN_MS = 350;
 

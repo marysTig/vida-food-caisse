@@ -8,31 +8,45 @@ import android.util.Log
 import com.getcapacitor.JSArray
 import com.getcapacitor.JSObject
 import org.json.JSONObject
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CopyOnWriteArraySet
+import java.util.concurrent.Executors
+import java.util.concurrent.ScheduledFuture
+import java.util.concurrent.TimeUnit
 
 /**
  * Process-wide USB/BT link facts for the POS status LEDs.
- * Pushes change notifications to [HubPrintWorkerPlugin] via [onChanged].
+ *
+ * Kitchen BT is one radio: live RFCOMM is exclusive, but LEDs must stay independent.
+ * MAC-switch ACL drops must not immediately mark the other kitchen offline.
  */
 object PrinterLinkStatusHub {
   private const val TAG = "PrinterLinkStatus"
 
+  /** Verified-ok window after a successful print/probe (per MAC). */
+  private const val BT_OK_TTL_MS = 180_000L
+
+  /** Delay before treating ACL-down as power-off (ignores radio handoffs). */
+  private const val ACL_OK_CLEAR_DELAY_MS = 15_000L
+
+  /** Window where ACL disconnects are attributed to our own MAC switch / probe. */
+  private const val RADIO_SWITCH_GUARD_MS = 10_000L
+
   @Volatile var onChanged: (() -> Unit)? = null
 
-  /** MACs with an active ACL (from system broadcasts). */
   private val aclConnectedMacs = CopyOnWriteArraySet<String>()
+  private val okBtMacAt = ConcurrentHashMap<String, Long>()
+  private val pendingOkClears = ConcurrentHashMap<String, ScheduledFuture<*>>()
 
-  /** MACs that successfully printed/probed this process (with timestamp). */
-  private val okBtMacAt = java.util.concurrent.ConcurrentHashMap<String, Long>()
+  private val scheduler = Executors.newSingleThreadScheduledExecutor { r ->
+    Thread(r, "PrinterLinkOkClear").apply { isDaemon = true }
+  }
 
-  /** Grace window after a successful BT job before requiring live/ACL again. */
-  private const val BT_OK_TTL_MS = 45_000L
+  @Volatile private var intentionalSwitchUntilMs = 0L
 
-  /** Last known live BT keep-alive MAC from EscPosBluetoothPrinter. */
   @Volatile var liveBtMac: String? = null
     private set
 
-  /** Live USB session VID/PID (null if none). */
   @Volatile var liveUsbVid: Int? = null
     private set
   @Volatile var liveUsbPid: Int? = null
@@ -40,6 +54,15 @@ object PrinterLinkStatusHub {
 
   fun normalizeMac(mac: String): String =
     mac.trim().uppercase().replace('-', ':')
+
+  /**
+   * Call before connecting/probing a different kitchen MAC so transient ACL
+   * disconnects on the sibling printer do not clear its verified-ok LED.
+   */
+  fun markIntentionalRadioSwitch() {
+    intentionalSwitchUntilMs = System.currentTimeMillis() + RADIO_SWITCH_GUARD_MS
+    Log.i(TAG, "radio-switch guard ${RADIO_SWITCH_GUARD_MS}ms")
+  }
 
   fun onUsbAttached(vendorId: Int, productId: Int) {
     Log.i(TAG, "usb attached $vendorId:$productId")
@@ -68,23 +91,32 @@ object PrinterLinkStatusHub {
   }
 
   fun onBtAclConnected(mac: String) {
-    aclConnectedMacs.add(normalizeMac(mac))
-    Log.i(TAG, "bt acl connected $mac")
+    val n = normalizeMac(mac)
+    aclConnectedMacs.add(n)
+    cancelOkClear(n)
+    Log.i(TAG, "bt acl connected $n")
     notifyChanged()
   }
 
   fun onBtAclDisconnected(mac: String) {
     val n = normalizeMac(mac)
     aclConnectedMacs.remove(n)
-    // Power-off / link drop: clear verified-ok so LED cannot stay green on bond alone.
-    okBtMacAt.remove(n)
-    Log.i(TAG, "bt acl disconnected $mac")
+    val now = System.currentTimeMillis()
+    if (now < intentionalSwitchUntilMs) {
+      Log.i(TAG, "acl disconnect · $n · ok retained (radio switch)")
+      notifyChanged()
+      return
+    }
+    // Real drop / power-off: debounce before clearing verified-ok.
+    scheduleOkClear(n)
+    Log.i(TAG, "bt acl disconnected $n · ok-clear in ${ACL_OK_CLEAR_DELAY_MS}ms")
     notifyChanged()
   }
 
   fun onBtSessionOpened(mac: String) {
     val n = normalizeMac(mac)
     liveBtMac = n
+    cancelOkClear(n)
     okBtMacAt[n] = System.currentTimeMillis()
     notifyChanged()
   }
@@ -94,11 +126,14 @@ object PrinterLinkStatusHub {
     if (n == null || liveBtMac == n) {
       liveBtMac = null
     }
+    // Do not clear okBtMacAt — sibling kitchens must keep their verified LED.
     notifyChanged()
   }
 
   fun onBtSuccess(mac: String) {
-    okBtMacAt[normalizeMac(mac)] = System.currentTimeMillis()
+    val n = normalizeMac(mac)
+    cancelOkClear(n)
+    okBtMacAt[n] = System.currentTimeMillis()
     notifyChanged()
   }
 
@@ -109,6 +144,22 @@ object PrinterLinkStatusHub {
     val at = okBtMacAt[mac] ?: return false
     return System.currentTimeMillis() - at < BT_OK_TTL_MS
   }
+
+  private fun scheduleOkClear(mac: String) {
+    cancelOkClear(mac)
+    val future = scheduler.schedule({
+      okBtMacAt.remove(mac)
+      pendingOkClears.remove(mac)
+      Log.i(TAG, "ok cleared after ACL down · $mac")
+      notifyChanged()
+    }, ACL_OK_CLEAR_DELAY_MS, TimeUnit.MILLISECONDS)
+    pendingOkClears[mac] = future
+  }
+
+  private fun cancelOkClear(mac: String) {
+    pendingOkClears.remove(mac)?.cancel(false)
+  }
+
   @SuppressLint("MissingPermission")
   fun buildStatusArray(
     context: Context,
@@ -122,7 +173,6 @@ object PrinterLinkStatusHub {
       return out
     }
 
-    Log.i(TAG, "buildStatusArray count=${printers.length()}")
     for (i in 0 until printers.length()) {
       val raw = coerceToJSObject(printers.opt(i))
       if (raw == null) {
@@ -186,11 +236,12 @@ object PrinterLinkStatusHub {
           val live = liveBtMac == mac
           val acl = isAclConnected(mac)
           val lastOk = isRecentBtOk(mac)
-          // Bond alone is NOT online — Android keeps BOND_BONDED when printer is off.
-          // Ready only with live RFCOMM, ACL link, or a short post-success TTL.
+          // Green only when we have a live RFCOMM session or a recent successful
+          // print/probe. ACL alone is a false green (Logcat: ACL up while CHANNEL1 fails).
           val state = when {
             !bonded -> "disconnected"
-            live || acl || lastOk -> "ready"
+            live || lastOk -> "ready"
+            acl -> "pending"
             else -> "disconnected"
           }
           o.put("state", state)
@@ -202,8 +253,9 @@ object PrinterLinkStatusHub {
             "detail",
             when {
               !bonded -> "BT non appairée"
-              live || acl -> "BT connectée"
+              live -> "BT session"
               lastOk -> "BT prête"
+              acl -> "BT lien — en attente"
               else -> "BT hors ligne"
             },
           )
@@ -211,7 +263,6 @@ object PrinterLinkStatusHub {
       }
       out.put(o)
     }
-    Log.i(TAG, "buildStatusArray out=${out.length()}")
     return out
   }
 

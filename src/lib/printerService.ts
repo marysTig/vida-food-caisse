@@ -51,7 +51,7 @@ export {
 } from "@/lib/bluetoothRadio";
 
 /** Inter-printer gap — 2-kitchen BT profile (matches INTER_PRINTER_GAP_MS). */
-export const BT_INTER_PRINTER_GAP_MS = 900;
+export const BT_INTER_PRINTER_GAP_MS = 400;
 
 const webConnectedDevices = new Map<string, any>();
 

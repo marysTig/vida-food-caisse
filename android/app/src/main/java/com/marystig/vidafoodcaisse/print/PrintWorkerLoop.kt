@@ -25,7 +25,9 @@ class PrintWorkerLoop(
 ) {
   companion object {
     private const val TAG = "PrintWorkerLoop"
-    private const val POLL_IDLE_MS = 2_500L
+    private const val POLL_IDLE_MS = 800L
+    /** Wake-responsive sleep slice — must be << POLL_IDLE so claimed jobs start immediately. */
+    private const val WAKE_SLICE_MS = 50L
     private const val RADIO_THREAD = "HubPrintRadio"
     private const val USB_THREAD = "HubPrintUsb"
     private const val NET_THREAD = "HubPrintNet"
@@ -166,7 +168,8 @@ class PrintWorkerLoop(
   fun adminProbe(printerName: String, mac: String): Pair<Boolean, String> {
     return runOnRadioBlocking {
       try {
-        if (localQueue.hasBtWork() || repo.countActiveJobs() > 0) {
+        // Never steal the radio during kitchen/receipt bursts — LEDs stay on lastOk TTL.
+        if (localQueue.hasBtWork() || localQueue.hasUsbWork() || repo.countActiveJobs() > 0) {
           return@runOnRadioBlocking false to "File d'impression active — probe différé"
         }
         btPrinter.probeConnect(printerName, mac)
@@ -583,10 +586,25 @@ class PrintWorkerLoop(
 
   private fun sleepInterruptible(ms: Long) {
     if (ms <= 0L) return
-    try {
-      Thread.sleep(ms)
-    } catch (_: InterruptedException) {
-      Thread.currentThread().interrupt()
+    // #region agent log
+    if (ms >= 200L) {
+      Log.i(
+        "PrinterLinkDebug",
+        """{"sessionId":"5eee2c","hypothesisId":"A","runId":"post-fix","location":"PrintWorkerLoop.sleep","message":"sleep-start","data":{"ms":$ms,"thread":"${Thread.currentThread().name}"},"timestamp":${System.currentTimeMillis()}}""",
+      )
+    }
+    // #endregion
+    var left = ms
+    while (left > 0L && running.get()) {
+      if (wake.get()) return
+      val slice = minOf(WAKE_SLICE_MS, left)
+      try {
+        Thread.sleep(slice)
+      } catch (_: InterruptedException) {
+        Thread.currentThread().interrupt()
+        return
+      }
+      left -= slice
     }
   }
 }

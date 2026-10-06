@@ -171,7 +171,7 @@ class HubPrintWorkerService : Service() {
     val deviceId = WorkerConfig.deviceId(this)!!
 
     acquireWakeLock()
-    val btPrinter = EscPosBluetoothPrinter()
+    val btPrinter = EscPosBluetoothPrinter(applicationContext)
     val usbPrinter = EscPosUsbPrinter(applicationContext)
     val repo = PrintJobRepository(url, key, deviceId)
     val worker = PrintWorkerLoop(repo, btPrinter, usbPrinter) { running, depth, err ->

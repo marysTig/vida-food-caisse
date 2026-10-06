@@ -13,29 +13,33 @@ import java.util.concurrent.atomic.AtomicReference
 
 /**
  * Classic SPP (RFCOMM) ESC/POS sender with same-MAC session keep-alive.
- * Prefers last-known connect mode per MAC; caps SPP attempts so a dead UUID
- * path cannot burn 15s on the radio thread (Logcat 17:50 evidence).
+ * Default connect mode is SPP — CHANNEL1 first burns ~5s and dirties ACL so the
+ * SPP fallback often fails (Logcat 20:40 Plaque/Four evidence).
  */
-class EscPosBluetoothPrinter {
+class EscPosBluetoothPrinter(
+  private val appContext: android.content.Context? = null,
+) {
   companion object {
     private const val TAG = "EscPosBt"
+    private const val PREFS = "escpos_bt_modes"
     private val SPP_UUID: UUID =
       UUID.fromString("00001101-0000-1000-8000-00805F9B34FB")
 
     const val OP_TIMEOUT_MS = 15_000L
-    /** Fast-fail SPP UUID — Logcat showed long stalls before fallback. */
-    const val SPP_ATTEMPT_MS = 3_000L
-    /** Cuisin likes channel-1 (~0.5s); Caisse often needs clean radio — don't burn 6s. */
-    const val CHANNEL1_ATTEMPT_MS = 3_500L
+    /** Primary path for kitchen ESC/POS. */
+    const val SPP_ATTEMPT_MS = 4_000L
+    /** Fallback only — keep short so a dead channel-1 cannot burn the radio. */
+    const val CHANNEL1_ATTEMPT_MS = 2_000L
     const val PROBE_ATTEMPT_MS = 2_500L
-    /** Pause after a failed connect mode before trying the other (dirty ACL). */
-    const val INTER_MODE_SETTLE_MS = 450L
-    /** Extra settle when closing a keep-alive session to switch MAC. */
-    const val MAC_SWITCH_SETTLE_MS = 500L
+    /** After CHANNEL1 timeout the ACL is dirty — needs longer than 450ms (Logcat read ret -1). */
+    const val INTER_MODE_SETTLE_MS = 900L
+    /** Kitchen↔kitchen MAC handoff — kept short now that SPP-first is stable. */
+    const val MAC_SWITCH_SETTLE_MS = 250L
     const val HARD_SETTLE_MS = 700L
-    const val PRE_DISCONNECT_DRAIN_MS = 175L
-    const val INTER_PRINTER_GAP_MS = 900L
-    const val RECEIPT_MAC_COOLDOWN_MS = 350L
+    const val PRE_DISCONNECT_DRAIN_MS = 100L
+    /** Inter-kitchen gap on one radio (was 900 — dominant delay after SPP fix). */
+    const val INTER_PRINTER_GAP_MS = 400L
+    const val RECEIPT_MAC_COOLDOWN_MS = 200L
     const val KEEPALIVE_MS = 20_000L
   }
 
@@ -56,6 +60,10 @@ class EscPosBluetoothPrinter {
   @Volatile private var liveOpenedAt = 0L
   @Volatile private var radioNeedsSettle = false
   @Volatile private var midWrite = false
+
+  init {
+    loadPreferredModes()
+  }
 
   fun isRadioDirty(): Boolean = radioNeedsSettle
 
@@ -155,6 +163,9 @@ class EscPosBluetoothPrinter {
       val hadLive = existing != null || liveMac != null
       val switchingMac =
         hadLive && liveMac != null && liveMac != mac
+      if (switchingMac || hadLive) {
+        PrinterLinkStatusHub.markIntentionalRadioSwitch()
+      }
       if (hadLive) {
         closeLiveSocket()
       }
@@ -219,7 +230,7 @@ class EscPosBluetoothPrinter {
     return SendTiming(gapMs, settleMs, connectMs, writeMs, reused)
   }
 
-  /** Reachability probe — short timeouts; does not burn 15s SPP. */
+  /** Reachability probe — soft when radio is clean to avoid stealing the other kitchen LED / traffic. */
   @SuppressLint("MissingPermission")
   fun probeConnect(printerName: String, macAddress: String) {
     val mac = normalizeMac(macAddress)
@@ -228,8 +239,17 @@ class EscPosBluetoothPrinter {
     if (!adapter.isEnabled) {
       throw IOException("Bluetooth désactivé")
     }
-    applyMacCooldown(mac, isReceipt = false)
-    hardSettle("probe:$printerName")
+    PrinterLinkStatusHub.markIntentionalRadioSwitch()
+    val hadLive = socketRef.get() != null || liveMac != null
+    if (hadLive && liveMac != mac) {
+      applyMacCooldown(mac, isReceipt = false)
+    }
+    if (radioNeedsSettle || hadLive) {
+      hardSettle("probe:$printerName")
+    } else {
+      // Soft status probe — no hard settle when radio is idle (cuts LED-check latency).
+      Thread.sleep(120L)
+    }
     val device = resolveBondedDevice(adapter, mac)
     val socket = connectEscPos(device, printerName, mac, probe = true)
     socketRef.set(socket)
@@ -241,7 +261,8 @@ class EscPosBluetoothPrinter {
       PrinterLinkStatusHub.onBtSuccess(mac)
     } finally {
       closeLiveSocket()
-      radioNeedsSettle = true
+      // Soft probe: leave radio usable for production without forcing dirty flag.
+      radioNeedsSettle = hadLive || radioNeedsSettle
     }
   }
 
@@ -252,9 +273,8 @@ class EscPosBluetoothPrinter {
   }
 
   /**
-   * Prefer last successful mode per MAC; default CHANNEL1 (Cuisin ~0.5s).
-   * After a failed mode, settle briefly before the other — Logcat showed instant
-   * SPP "read ret: -1" when tried immediately after CHANNEL1 timeout.
+   * Prefer last successful mode per MAC; default SPP (Logcat 20:40: CHANNEL1-first
+   * timed out then SPP failed on dirty ACL — jobs failed while LED stayed green).
    */
   @SuppressLint("MissingPermission")
   private fun connectEscPos(
@@ -271,29 +291,78 @@ class EscPosBluetoothPrinter {
     }
 
     val sppMs = if (probe) PROBE_ATTEMPT_MS else SPP_ATTEMPT_MS
-    val ch1Ms = if (probe) PROBE_ATTEMPT_MS else CHANNEL1_ATTEMPT_MS
-    val first = preferredMode[mac] ?: ConnectMode.CHANNEL1
-    val second = if (first == ConnectMode.CHANNEL1) ConnectMode.SPP else ConnectMode.CHANNEL1
+    val ch1Ms = if (probe) minOf(PROBE_ATTEMPT_MS, CHANNEL1_ATTEMPT_MS) else CHANNEL1_ATTEMPT_MS
+    val first = preferredMode[mac] ?: ConnectMode.SPP
+    val second = if (first == ConnectMode.SPP) ConnectMode.CHANNEL1 else ConnectMode.SPP
+
+    // #region agent log
+    Log.i(
+      "PrinterLinkDebug",
+      """{"sessionId":"5eee2c","hypothesisId":"A","runId":"post-fix","location":"EscPosBt.connectEscPos","message":"connect-order","data":{"printer":"$printerName","mac":"$mac","first":"${first.name}","second":"${second.name}","probe":$probe},"timestamp":${System.currentTimeMillis()}}""",
+    )
+    // #endregion
 
     try {
       val s = openMode(device, first, if (first == ConnectMode.SPP) sppMs else ch1Ms)
       preferredMode[mac] = first
+      persistPreferredMode(mac, first)
       Log.i(TAG, "CONNECTED ${first.name} · $printerName")
       return s
     } catch (firstErr: IOException) {
       Log.w(TAG, "${first.name} failed · $printerName — settle then ${second.name}", firstErr)
+      // #region agent log
+      Log.i(
+        "PrinterLinkDebug",
+        """{"sessionId":"5eee2c","hypothesisId":"A","runId":"post-fix","location":"EscPosBt.connectEscPos","message":"first-mode-failed","data":{"printer":"$printerName","mode":"${first.name}","err":"${firstErr.message?.replace("\"","'")}","next":"${second.name}"},"timestamp":${System.currentTimeMillis()}}""",
+      )
+      // #endregion
       try {
         socketRef.getAndSet(null)?.close()
       } catch (_: Exception) {
         /* ignore */
       }
-      Thread.sleep(INTER_MODE_SETTLE_MS)
+      val settle =
+        if (first == ConnectMode.CHANNEL1) maxOf(INTER_MODE_SETTLE_MS, HARD_SETTLE_MS)
+        else INTER_MODE_SETTLE_MS
+      Thread.sleep(settle)
     }
 
     val s = openMode(device, second, if (second == ConnectMode.SPP) sppMs else ch1Ms)
     preferredMode[mac] = second
+    persistPreferredMode(mac, second)
     Log.i(TAG, "CONNECTED ${second.name} · $printerName")
     return s
+  }
+
+  private fun loadPreferredModes() {
+    val ctx = appContext ?: return
+    try {
+      val prefs = ctx.getSharedPreferences(PREFS, android.content.Context.MODE_PRIVATE)
+      for ((k, v) in prefs.all) {
+        val mode = when (v?.toString()?.uppercase()) {
+          "SPP" -> ConnectMode.SPP
+          "CHANNEL1" -> ConnectMode.CHANNEL1
+          else -> null
+        }
+        if (mode != null && k.isNotBlank()) {
+          preferredMode[normalizeMac(k)] = mode
+        }
+      }
+    } catch (e: Exception) {
+      Log.w(TAG, "loadPreferredModes: ${e.message}")
+    }
+  }
+
+  private fun persistPreferredMode(mac: String, mode: ConnectMode) {
+    val ctx = appContext ?: return
+    try {
+      ctx.getSharedPreferences(PREFS, android.content.Context.MODE_PRIVATE)
+        .edit()
+        .putString(mac, mode.name)
+        .apply()
+    } catch (_: Exception) {
+      /* ignore */
+    }
   }
 
   @SuppressLint("MissingPermission")
