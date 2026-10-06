@@ -7,11 +7,31 @@ import com.getcapacitor.PluginCall
 import com.getcapacitor.PluginMethod
 import com.getcapacitor.annotation.CapacitorPlugin
 import com.marystig.vidafoodcaisse.print.EscPosUsbPrinter
+import com.marystig.vidafoodcaisse.print.PrinterLinkStatusHub
 import com.marystig.vidafoodcaisse.print.WorkerConfig
 import com.marystig.vidafoodcaisse.print.WorkerRuntime
 
 @CapacitorPlugin(name = "HubPrintWorker")
 class HubPrintWorkerPlugin : Plugin() {
+
+  override fun load() {
+    PrinterLinkStatusHub.onChanged = {
+      try {
+        val ret = JSObject()
+        ret.put("source", "native")
+        notifyListeners("printerLinkChanged", ret)
+      } catch (_: Exception) {
+        /* bridge may be gone */
+      }
+    }
+  }
+
+  override fun handleOnDestroy() {
+    if (PrinterLinkStatusHub.onChanged != null) {
+      PrinterLinkStatusHub.onChanged = null
+    }
+    super.handleOnDestroy()
+  }
 
   @PluginMethod
   fun startWorker(call: PluginCall) {
@@ -52,6 +72,19 @@ class HubPrintWorkerPlugin : Plugin() {
     ret.put("lastError", WorkerRuntime.lastError)
     ret.put("configured", WorkerConfig.isConfigured(context))
     call.resolve(ret)
+  }
+
+  @PluginMethod
+  fun getPrinterLinkStatus(call: PluginCall) {
+    try {
+      val printers = call.getArray("printers")
+      val arr = PrinterLinkStatusHub.buildStatusArray(context, printers)
+      val ret = JSObject()
+      ret.put("printers", arr)
+      call.resolve(ret)
+    } catch (e: Exception) {
+      call.reject("getPrinterLinkStatus failed: ${e.message}", e)
+    }
   }
 
   @PluginMethod

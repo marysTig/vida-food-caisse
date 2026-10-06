@@ -1,12 +1,17 @@
 package com.marystig.vidafoodcaisse;
 
 import android.Manifest;
+import android.content.Intent;
 import android.content.pm.PackageManager;
+import android.hardware.usb.UsbDevice;
+import android.hardware.usb.UsbManager;
 import android.os.Build;
 import android.os.Bundle;
 import androidx.core.app.ActivityCompat;
 import androidx.core.content.ContextCompat;
 import com.getcapacitor.BridgeActivity;
+import com.marystig.vidafoodcaisse.print.PrintWorkerLoop;
+import com.marystig.vidafoodcaisse.print.WorkerRuntime;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -15,6 +20,7 @@ import java.util.List;
  * Without BLUETOOTH_SCAN, ConnectThread.cancelDiscovery() throws SecurityException
  * and kills the app when the print hub starts draining jobs.
  * Also requests POST_NOTIFICATIONS (API 33+) for the hub FGS notification.
+ * USB OTG: device_filter.xml + USB_DEVICE_ATTACHED → warm reconnect without Admin.
  */
 public class MainActivity extends BridgeActivity {
   private static final int BT_PERM_REQ = 4201;
@@ -28,6 +34,35 @@ public class MainActivity extends BridgeActivity {
     if (getBridge() != null && getBridge().getWebView() != null) {
       getBridge().getWebView().clearCache(true);
     }
+    handleUsbAttachIntent(getIntent());
+  }
+
+  @Override
+  protected void onNewIntent(Intent intent) {
+    super.onNewIntent(intent);
+    setIntent(intent);
+    handleUsbAttachIntent(intent);
+  }
+
+  /**
+   * Manifest intent-filter + @xml/device_filter delivers ATTACHED here (including
+   * when the app is already open via singleTask). Forward to the hub USB thread.
+   */
+  private void handleUsbAttachIntent(Intent intent) {
+    if (intent == null) return;
+    if (!UsbManager.ACTION_USB_DEVICE_ATTACHED.equals(intent.getAction())) return;
+
+    UsbDevice device;
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+      device = intent.getParcelableExtra(UsbManager.EXTRA_DEVICE, UsbDevice.class);
+    } else {
+      device = intent.getParcelableExtra(UsbManager.EXTRA_DEVICE);
+    }
+    if (device == null) return;
+
+    PrintWorkerLoop loop = WorkerRuntime.INSTANCE.getLoop();
+    if (loop == null) return;
+    loop.onUsbDeviceAttached(device);
   }
 
   private void requestRuntimePermissions() {

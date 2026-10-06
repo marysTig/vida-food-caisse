@@ -68,6 +68,10 @@ class EscPosBluetoothPrinter {
     closeLiveSocket()
   }
 
+  fun liveMacOrNull(): String? = liveMac
+
+  fun lastSuccessMacOrNull(): String? = lastSuccessMac
+
   fun hardSettle(reason: String) {
     forceClose(reason)
     Log.i(TAG, "settle ${HARD_SETTLE_MS}ms · $reason")
@@ -86,6 +90,7 @@ class EscPosBluetoothPrinter {
   }
 
   private fun closeLiveSocket() {
+    val prev = liveMac
     liveMac = null
     liveOpenedAt = 0L
     try {
@@ -93,6 +98,7 @@ class EscPosBluetoothPrinter {
     } catch (_: Exception) {
       /* ignore */
     }
+    PrinterLinkStatusHub.onBtSessionClosed(prev)
   }
 
   private fun normalizeMac(mac: String): String =
@@ -179,6 +185,7 @@ class EscPosBluetoothPrinter {
       socketRef.set(socket)
       liveMac = mac
       liveOpenedAt = System.currentTimeMillis()
+      PrinterLinkStatusHub.onBtSessionOpened(mac)
       Log.i(TAG, "CONNECTED · $printerName · connect_ms=$connectMs")
     }
 
@@ -203,6 +210,7 @@ class EscPosBluetoothPrinter {
     liveMac = mac
     liveOpenedAt = System.currentTimeMillis()
     radioNeedsSettle = false
+    PrinterLinkStatusHub.onBtSuccess(mac)
     Log.i(
       TAG,
       "SEND COMPLETE · $printerName · bytes=${raw.size} · reuse=$reused · " +
@@ -226,9 +234,11 @@ class EscPosBluetoothPrinter {
     val socket = connectEscPos(device, printerName, mac, probe = true)
     socketRef.set(socket)
     liveMac = mac
+    PrinterLinkStatusHub.onBtSessionOpened(mac)
     try {
       lastSuccessMac = mac
       radioNeedsSettle = false
+      PrinterLinkStatusHub.onBtSuccess(mac)
     } finally {
       closeLiveSocket()
       radioNeedsSettle = true

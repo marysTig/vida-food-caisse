@@ -22,17 +22,24 @@ import java.util.concurrent.atomic.AtomicReference
 /**
  * USB Host ESC/POS sender (OTG). Prefers USB Printer class (0x07), else any bulk OUT.
  * Holds an open connection for keep-alive reuse while the same VID/PID stays attached.
+ * Hot-plug: detach closes the session; attach / next job re-opens without Admin Connect.
  */
 class EscPosUsbPrinter(private val appContext: Context) {
   companion object {
     private const val TAG = "EscPosUsb"
     private const val ACTION_USB_PERMISSION =
       "com.marystig.vidafoodcaisse.USB_PERMISSION"
+    private const val PREFS = "escpos_usb"
+    private const val KEY_LAST_VID = "last_vendor_id"
+    private const val KEY_LAST_PID = "last_product_id"
     const val TRANSFER_TIMEOUT_MS = 5_000
     const val CHUNK_SIZE = 16_384
     const val CHUNK_GAP_MS = 5L
     const val KEEPALIVE_MS = 60_000L
     const val PERMISSION_WAIT_MS = 45_000L
+    /** Enumeration can lag a few hundred ms after ACTION_USB_DEVICE_ATTACHED. */
+    private const val ENUM_RETRY_COUNT = 5
+    private const val ENUM_RETRY_GAP_MS = 200L
   }
 
   data class UsbDeviceInfo(
@@ -61,6 +68,9 @@ class EscPosUsbPrinter(private val appContext: Context) {
 
   private val usbManager =
     appContext.getSystemService(Context.USB_SERVICE) as UsbManager
+
+  private val prefs =
+    appContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
 
   @Volatile private var live: LiveSession? = null
 
@@ -95,12 +105,66 @@ class EscPosUsbPrinter(private val appContext: Context) {
   }
 
   fun onDeviceDetached(device: UsbDevice) {
-    val session = live ?: return
-    if (session.device.deviceName == device.deviceName ||
-      (session.vendorId == device.vendorId && session.productId == device.productId)
-    ) {
+    val session = live
+    if (session != null && matchesSession(session, device)) {
       Log.w(TAG, "USB detached · ${hexId(session.vendorId, session.productId)}")
       closeLive()
+      PrinterLinkStatusHub.onUsbDetached(device.vendorId, device.productId)
+      return
+    }
+    // Stale live with same VID/PID under a different deviceName
+    if (session != null &&
+      session.vendorId == device.vendorId &&
+      session.productId == device.productId
+    ) {
+      Log.w(TAG, "USB detached (vid/pid) · ${hexId(device.vendorId, device.productId)}")
+      closeLive()
+    }
+    PrinterLinkStatusHub.onUsbDetached(device.vendorId, device.productId)
+  }
+
+  /**
+   * Called from BroadcastReceiver / MainActivity on ACTION_USB_DEVICE_ATTACHED.
+   * Requests permission (auto-granted when device_filter matched) and warm-opens
+   * if this is the last-known Caisse printer.
+   */
+  fun onDeviceAttached(device: UsbDevice) {
+    Log.i(
+      TAG,
+      "USB attached · ${hexId(device.vendorId, device.productId)} · ${device.deviceName}",
+    )
+    PrinterLinkStatusHub.onUsbAttached(device.vendorId, device.productId)
+    val session = live
+    if (session != null &&
+      session.vendorId == device.vendorId &&
+      session.productId == device.productId
+    ) {
+      // Old connection handle is invalid after unplug — always reset.
+      closeLive()
+    }
+
+    if (!looksLikePrinter(device) && !isLastKnown(device.vendorId, device.productId)) {
+      Log.i(TAG, "ignore non-printer USB attach")
+      return
+    }
+
+    try {
+      ensurePermission(device)
+    } catch (e: Exception) {
+      Log.w(TAG, "attach permission: ${e.message}")
+      return
+    }
+
+    if (!isLastKnown(device.vendorId, device.productId)) {
+      Log.i(TAG, "permission ready · warm open deferred (not last Caisse)")
+      return
+    }
+
+    try {
+      ensureSession("USB/Caisse", device.vendorId, device.productId)
+      Log.i(TAG, "warm reconnect OK · ${hexId(device.vendorId, device.productId)}")
+    } catch (e: Exception) {
+      Log.w(TAG, "warm reconnect deferred: ${e.message}")
     }
   }
 
@@ -119,13 +183,39 @@ class EscPosUsbPrinter(private val appContext: Context) {
     val raw = Base64.decode(dataBase64, Base64.DEFAULT)
     if (raw.isEmpty()) throw IOException("Payload ESC/POS vide")
 
+    var lastError: Exception? = null
+    // One reopen pass covers stale keep-alive after silent detach / cable bounce.
+    repeat(2) { attempt ->
+      try {
+        return sendOnce(printerName, vendorId, productId, raw, attempt > 0)
+      } catch (e: Exception) {
+        lastError = e
+        Log.w(TAG, "send attempt ${attempt + 1} failed · ${e.message}")
+        closeLive()
+        if (attempt == 0) {
+          Thread.sleep(ENUM_RETRY_GAP_MS)
+        }
+      }
+    }
+    throw (lastError ?: IOException("Erreur impression USB"))
+  }
+
+  private fun sendOnce(
+    printerName: String,
+    vendorId: Int,
+    productId: Int,
+    raw: ByteArray,
+    forceReopen: Boolean,
+  ): SendTiming {
     var reused = false
     var connectMs = 0L
     val existing = live
     val session = if (
+      !forceReopen &&
       existing != null &&
       existing.vendorId == vendorId &&
       existing.productId == productId &&
+      isSessionAlive(existing) &&
       (System.currentTimeMillis() - existing.openedAt) < KEEPALIVE_MS
     ) {
       reused = true
@@ -147,8 +237,8 @@ class EscPosUsbPrinter(private val appContext: Context) {
     }
     val writeMs = System.currentTimeMillis() - tWrite
 
-    // Refresh keep-alive clock
     live = session.copy(openedAt = System.currentTimeMillis())
+    rememberLast(vendorId, productId)
     Log.i(
       TAG,
       "SEND COMPLETE · $printerName · bytes=${raw.size} · reuse=$reused · " +
@@ -163,7 +253,7 @@ class EscPosUsbPrinter(private val appContext: Context) {
     productId: Int,
   ): LiveSession {
     closeLive()
-    val device = findDevice(vendorId, productId)
+    val device = findDeviceWithRetry(vendorId, productId)
       ?: throw IOException(
         "Imprimante USB non branchée (${hexId(vendorId, productId)}) · $printerName",
       )
@@ -194,6 +284,8 @@ class EscPosUsbPrinter(private val appContext: Context) {
       openedAt = System.currentTimeMillis(),
     )
     live = session
+    rememberLast(vendorId, productId)
+    PrinterLinkStatusHub.onUsbSessionOpened(vendorId, productId)
     Log.i(TAG, "CONNECTED · $printerName · ${hexId(vendorId, productId)}")
     return session
   }
@@ -226,10 +318,54 @@ class EscPosUsbPrinter(private val appContext: Context) {
     }
   }
 
+  private fun findDeviceWithRetry(vendorId: Int, productId: Int): UsbDevice? {
+    repeat(ENUM_RETRY_COUNT) { i ->
+      val found = findDevice(vendorId, productId)
+      if (found != null) return found
+      if (i < ENUM_RETRY_COUNT - 1) {
+        Thread.sleep(ENUM_RETRY_GAP_MS)
+      }
+    }
+    return null
+  }
+
   private fun findDevice(vendorId: Int, productId: Int): UsbDevice? {
     return usbManager.deviceList.values.firstOrNull {
       it.vendorId == vendorId && it.productId == productId
     }
+  }
+
+  private fun isSessionAlive(session: LiveSession): Boolean {
+    val current = findDevice(session.vendorId, session.productId) ?: return false
+    if (current.deviceName != session.device.deviceName) return false
+    return usbManager.hasPermission(current)
+  }
+
+  private fun matchesSession(session: LiveSession, device: UsbDevice): Boolean {
+    return session.device.deviceName == device.deviceName ||
+      (session.vendorId == device.vendorId && session.productId == device.productId)
+  }
+
+  private fun looksLikePrinter(device: UsbDevice): Boolean {
+    for (i in 0 until device.interfaceCount) {
+      val iface = device.getInterface(i)
+      if (iface.interfaceClass == UsbConstants.USB_CLASS_PRINTER) return true
+      if (findBulkOutEndpoint(iface) != null) return true
+    }
+    return false
+  }
+
+  private fun isLastKnown(vendorId: Int, productId: Int): Boolean {
+    if (!prefs.contains(KEY_LAST_VID) || !prefs.contains(KEY_LAST_PID)) return false
+    return prefs.getInt(KEY_LAST_VID, -1) == vendorId &&
+      prefs.getInt(KEY_LAST_PID, -1) == productId
+  }
+
+  private fun rememberLast(vendorId: Int, productId: Int) {
+    prefs.edit()
+      .putInt(KEY_LAST_VID, vendorId)
+      .putInt(KEY_LAST_PID, productId)
+      .apply()
   }
 
   private fun findPrinterInterface(device: UsbDevice): UsbInterface? {
@@ -321,6 +457,7 @@ class EscPosUsbPrinter(private val appContext: Context) {
     } catch (_: Exception) {
       /* ignore */
     }
+    PrinterLinkStatusHub.onUsbSessionClosed()
   }
 
   private fun hexId(vendorId: Int, productId: Int): String =

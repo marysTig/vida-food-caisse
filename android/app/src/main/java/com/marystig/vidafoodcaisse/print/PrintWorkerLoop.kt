@@ -83,6 +83,17 @@ class PrintWorkerLoop(
     usbPrinter.onDeviceDetached(device)
   }
 
+  /** Hot-plug: permission + warm reconnect on the USB worker thread. */
+  fun onUsbDeviceAttached(device: android.hardware.usb.UsbDevice) {
+    runOnUsb {
+      try {
+        usbPrinter.onDeviceAttached(device)
+      } catch (e: Exception) {
+        Log.w(TAG, "USB attach handler: ${e.message}")
+      }
+    }
+  }
+
   fun start() {
     if (!running.compareAndSet(false, true)) return
     btPrinter.forceClose("loop-start")
@@ -225,6 +236,15 @@ class PrintWorkerLoop(
       return
     }
     adminBtQueue.offer(block)
+    wake()
+  }
+
+  private fun runOnUsb(block: () -> Unit) {
+    if (Thread.currentThread().name == USB_THREAD) {
+      block()
+      return
+    }
+    adminUsbQueue.offer(block)
     wake()
   }
 

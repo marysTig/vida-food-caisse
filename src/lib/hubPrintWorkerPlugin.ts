@@ -21,6 +21,9 @@ export interface HubPrintWorkerPlugin {
   }): Promise<{ running: boolean }>;
   stopWorker(): Promise<void>;
   getWorkerStatus(): Promise<HubPrintWorkerStatus>;
+  getPrinterLinkStatus(options: {
+    printers: NativePrinterLinkQuery[];
+  }): Promise<{ printers: NativePrinterLinkStatus[] }>;
   triggerManualRetry(): Promise<void>;
   wakeWorker(): Promise<void>;
   listUsbDevices(): Promise<{ devices: UsbDeviceInfo[] }>;
@@ -39,6 +42,10 @@ export interface HubPrintWorkerPlugin {
     productId?: number;
     escposBase64: string;
   }): Promise<{ ok: boolean; detail: string }>;
+  addListener(
+    eventName: "printerLinkChanged",
+    listenerFunc: (event: { source?: string }) => void,
+  ): Promise<{ remove: () => Promise<void> }>;
 }
 
 export type UsbDeviceInfo = {
@@ -47,6 +54,28 @@ export type UsbDeviceInfo = {
   deviceName: string;
   productName: string | null;
   hasPermission: boolean;
+};
+
+export type NativePrinterLinkQuery = {
+  id: string;
+  name: string;
+  transport: "bluetooth" | "usb";
+  macAddress?: string | null;
+  vendorId?: number | null;
+  productId?: number | null;
+};
+
+export type NativePrinterLinkStatus = {
+  id: string;
+  name: string;
+  transport: string;
+  state: string;
+  detail?: string;
+  present?: boolean;
+  permission?: boolean;
+  live?: boolean;
+  bonded?: boolean;
+  aclConnected?: boolean;
 };
 
 const HubPrintWorker = registerPlugin<HubPrintWorkerPlugin>("HubPrintWorker");
@@ -204,4 +233,34 @@ export async function nativeListUsbDevices(): Promise<UsbDeviceInfo[]> {
 
 export async function nativeTriggerManualRetry(): Promise<void> {
   await HubPrintWorker.triggerManualRetry();
+}
+
+export async function nativeGetPrinterLinkStatus(
+  printers: NativePrinterLinkQuery[],
+): Promise<NativePrinterLinkStatus[]> {
+  if (!isNativePrintWorkerPlatform()) return [];
+  try {
+    const ret = await HubPrintWorker.getPrinterLinkStatus({ printers });
+    return ret.printers ?? [];
+  } catch (err) {
+    console.warn("[HubPrintWorker] getPrinterLinkStatus failed", err);
+    return [];
+  }
+}
+
+export async function subscribeNativePrinterLinkChanges(
+  listener: () => void,
+): Promise<() => void> {
+  if (!isNativePrintWorkerPlatform()) return () => undefined;
+  try {
+    const handle = await HubPrintWorker.addListener("printerLinkChanged", () => {
+      listener();
+    });
+    return () => {
+      void handle.remove();
+    };
+  } catch (err) {
+    console.warn("[HubPrintWorker] printerLinkChanged listener failed", err);
+    return () => undefined;
+  }
 }

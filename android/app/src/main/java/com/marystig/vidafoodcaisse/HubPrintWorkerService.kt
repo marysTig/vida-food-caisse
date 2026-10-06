@@ -5,9 +5,14 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
+import android.bluetooth.BluetoothDevice
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.ServiceInfo
+import android.hardware.usb.UsbDevice
+import android.hardware.usb.UsbManager
 import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
@@ -17,12 +22,9 @@ import com.marystig.vidafoodcaisse.print.EscPosBluetoothPrinter
 import com.marystig.vidafoodcaisse.print.EscPosUsbPrinter
 import com.marystig.vidafoodcaisse.print.PrintJobRepository
 import com.marystig.vidafoodcaisse.print.PrintWorkerLoop
+import com.marystig.vidafoodcaisse.print.PrinterLinkStatusHub
 import com.marystig.vidafoodcaisse.print.WorkerConfig
 import com.marystig.vidafoodcaisse.print.WorkerRuntime
-import android.hardware.usb.UsbManager
-import android.content.BroadcastReceiver
-import android.content.IntentFilter
-import android.hardware.usb.UsbDevice
 
 /**
  * Foreground service that owns RFCOMM + print_jobs drain (Phase 1).
@@ -48,47 +50,86 @@ class HubPrintWorkerService : Service() {
 
   private var loop: PrintWorkerLoop? = null
   private var wakeLock: PowerManager.WakeLock? = null
-  private var usbDetachRegistered = false
+  private var linkReceiversRegistered = false
 
-  private val usbDetachReceiver = object : BroadcastReceiver() {
+  private val linkHotplugReceiver = object : BroadcastReceiver() {
     override fun onReceive(context: Context?, intent: Intent?) {
-      if (intent?.action != UsbManager.ACTION_USB_DEVICE_DETACHED) return
-      val device = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-        intent.getParcelableExtra(UsbManager.EXTRA_DEVICE, UsbDevice::class.java)
-      } else {
-        @Suppress("DEPRECATION")
-        intent.getParcelableExtra(UsbManager.EXTRA_DEVICE) as? UsbDevice
-      } ?: return
-      loop?.onUsbDeviceDetached(device)
+      val action = intent?.action ?: return
+      when (action) {
+        UsbManager.ACTION_USB_DEVICE_ATTACHED -> {
+          val device = usbDeviceFrom(intent) ?: return
+          Log.i(TAG, "USB_DEVICE_ATTACHED · ${device.vendorId}:${device.productId}")
+          PrinterLinkStatusHub.onUsbAttached(device.vendorId, device.productId)
+          loop?.onUsbDeviceAttached(device)
+        }
+        UsbManager.ACTION_USB_DEVICE_DETACHED -> {
+          val device = usbDeviceFrom(intent) ?: return
+          Log.i(TAG, "USB_DEVICE_DETACHED · ${device.vendorId}:${device.productId}")
+          PrinterLinkStatusHub.onUsbDetached(device.vendorId, device.productId)
+          loop?.onUsbDeviceDetached(device)
+        }
+        BluetoothDevice.ACTION_ACL_CONNECTED -> {
+          val mac = btMacFrom(intent) ?: return
+          PrinterLinkStatusHub.onBtAclConnected(mac)
+        }
+        BluetoothDevice.ACTION_ACL_DISCONNECTED -> {
+          val mac = btMacFrom(intent) ?: return
+          PrinterLinkStatusHub.onBtAclDisconnected(mac)
+        }
+      }
     }
+  }
+
+  private fun usbDeviceFrom(intent: Intent): UsbDevice? {
+    return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+      intent.getParcelableExtra(UsbManager.EXTRA_DEVICE, UsbDevice::class.java)
+    } else {
+      @Suppress("DEPRECATION")
+      intent.getParcelableExtra(UsbManager.EXTRA_DEVICE) as? UsbDevice
+    }
+  }
+
+  private fun btMacFrom(intent: Intent): String? {
+    val device = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+      intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE, BluetoothDevice::class.java)
+    } else {
+      @Suppress("DEPRECATION")
+      intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE) as? BluetoothDevice
+    }
+    return device?.address
   }
 
   override fun onCreate() {
     super.onCreate()
     ensureChannel()
-    registerUsbDetach()
+    registerLinkReceivers()
   }
 
-  private fun registerUsbDetach() {
-    if (usbDetachRegistered) return
-    val filter = IntentFilter(UsbManager.ACTION_USB_DEVICE_DETACHED)
+  private fun registerLinkReceivers() {
+    if (linkReceiversRegistered) return
+    val filter = IntentFilter().apply {
+      addAction(UsbManager.ACTION_USB_DEVICE_ATTACHED)
+      addAction(UsbManager.ACTION_USB_DEVICE_DETACHED)
+      addAction(BluetoothDevice.ACTION_ACL_CONNECTED)
+      addAction(BluetoothDevice.ACTION_ACL_DISCONNECTED)
+    }
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-      registerReceiver(usbDetachReceiver, filter, RECEIVER_NOT_EXPORTED)
+      registerReceiver(linkHotplugReceiver, filter, RECEIVER_NOT_EXPORTED)
     } else {
       @Suppress("UnspecifiedRegisterReceiverFlag")
-      registerReceiver(usbDetachReceiver, filter)
+      registerReceiver(linkHotplugReceiver, filter)
     }
-    usbDetachRegistered = true
+    linkReceiversRegistered = true
   }
 
-  private fun unregisterUsbDetach() {
-    if (!usbDetachRegistered) return
+  private fun unregisterLinkReceivers() {
+    if (!linkReceiversRegistered) return
     try {
-      unregisterReceiver(usbDetachReceiver)
+      unregisterReceiver(linkHotplugReceiver)
     } catch (_: Exception) {
       /* ignore */
     }
-    usbDetachRegistered = false
+    linkReceiversRegistered = false
   }
 
   override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -175,7 +216,7 @@ class HubPrintWorkerService : Service() {
   }
 
   override fun onDestroy() {
-    unregisterUsbDetach()
+    unregisterLinkReceivers()
     teardown("onDestroy")
     stopForegroundCompat()
     super.onDestroy()

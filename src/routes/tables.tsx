@@ -6,6 +6,7 @@ import {
 import { Sidebar } from "@/components/pos/Sidebar";
 import { MobileBottomNav } from "@/components/pos/MobileBottomNav";
 import { TableOrderSidebar } from "@/components/pos/TableOrderSidebar";
+import { PrinterStatusLeds } from "@/components/pos/PrinterStatusLeds";
 import { CheckoutReceiptModal } from "@/components/pos/CheckoutReceiptModal";
 import { formatElapsed, type TableStatus } from "@/data/tables";
 import { formatDA } from "@/data/menu";
@@ -578,10 +579,11 @@ function TablesPage() {
           <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-primary">
             <Armchair className="h-5 w-5 text-primary-foreground" />
           </div>
-          <div>
+          <div className="min-w-0 flex-1">
             <h1 className="text-lg font-bold text-foreground">Tables</h1>
             <p className="text-xs text-muted-foreground">Plan de salle</p>
           </div>
+          <PrinterStatusLeds className="justify-end" />
         </header>
 
         {/* Actions (À emporter + Fusionner) */}

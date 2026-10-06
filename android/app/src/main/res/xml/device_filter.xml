@@ -1,6 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- Kept in sync with device_filter.xml (manifest uses @xml/device_filter). -->
+    <!--
+      USB Printer Class (0x07). Matching this filter lets Android auto-grant
+      permission on re-attach (after the user accepts once) and delivers
+      ACTION_USB_DEVICE_ATTACHED to MainActivity without a Connect tap.
+    -->
     <usb-device class="7" />
     <usb-device class="7" subclass="1" protocol="1" />
     <usb-device class="7" subclass="1" protocol="2" />

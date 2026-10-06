@@ -8,8 +8,8 @@ android {
         applicationId "com.marystig.vidafoodcaisse"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 17
-        versionName "1.4.1-dual-kitchen"
+        versionCode 19
+        versionName "1.4.3-printer-leds"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
