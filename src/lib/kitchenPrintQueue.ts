@@ -26,7 +26,8 @@ export const MAX_PRINT_ATTEMPTS = 3;
 /** 2-printer profile — keep in sync with EscPosBluetoothPrinter / PrintJobRepository. */
 export const RETRY_BACKOFF_MS = 2500;
 export const RECEIPT_RETRY_BACKOFF_MS = 450;
-export const INTER_PRINTER_GAP_MS = 700;
+/** 2-kitchen BT profile — MAC handoff gap (native EscPosBluetoothPrinter). */
+export const INTER_PRINTER_GAP_MS = 900;
 /** Short cool-down when caisse switches MAC (not the full kitchen gap). */
 export const RECEIPT_MAC_COOLDOWN_MS = 350;
 
@@ -108,12 +109,18 @@ export type EnqueueReceiptResult =
 
 const STALE_PRINTING_MS = 2 * 60 * 1000;
 
+/** Max enabled cuisine Bluetooth stations (USB Caisse is separate). */
+const MAX_ENABLED_KITCHEN = 2;
+
 function enabledKitchenPrinters(printers: Printer[]): Printer[] {
-  const cuisine = printers.filter((p) => p.enabled && p.type === "cuisine");
-  // Strict 2-slot: at most one cuisine (prefer one with a MAC)
-  const withMac = cuisine.find((p) => (p.mac_address || "").trim() !== "");
-  if (withMac) return [withMac];
-  return cuisine.slice(0, 1);
+  return printers
+    .filter(
+      (p) =>
+        p.enabled &&
+        p.type === "cuisine" &&
+        (p.mac_address || "").trim() !== "",
+    )
+    .slice(0, MAX_ENABLED_KITCHEN);
 }
 
 function isCatchAllCuisine(printer: Printer): boolean {
@@ -154,19 +161,28 @@ export function findUnmappedDeltaLines(
   });
 }
 
+/**
+ * Split delta across kitchen printers.
+ * Mapped stations claim their categories first; catch-all gets leftovers only
+ * (avoids double-print when Four has categories and Plaque is empty).
+ */
 export function buildStationBundles(
   delta: CartItem[],
   kitchenPrinters: Printer[],
 ): KitchenStationBundle[] {
   const bundles: KitchenStationBundle[] = [];
-  for (const printer of kitchenPrinters) {
-    const lines = isCatchAllCuisine(printer)
-      ? delta
-      : delta.filter((item) => {
-          const catId = lineCategoryId(item);
-          const ids = new Set(printer.category_ids ?? []);
-          return !!catId && ids.has(catId);
-        });
+  const claimedLineIds = new Set<string>();
+
+  const mapped = kitchenPrinters.filter((p) => !isCatchAllCuisine(p));
+  const catchAlls = kitchenPrinters.filter(isCatchAllCuisine);
+
+  for (const printer of mapped) {
+    const ids = new Set(printer.category_ids ?? []);
+    const lines = delta.filter((item) => {
+      const catId = lineCategoryId(item);
+      return !!catId && ids.has(catId);
+    });
+    for (const line of lines) claimedLineIds.add(line.id);
     if (lines.length > 0) {
       bundles.push({
         printerId: printer.id,
@@ -175,6 +191,18 @@ export function buildStationBundles(
       });
     }
   }
+
+  const leftovers = delta.filter((item) => !claimedLineIds.has(item.id));
+  if (leftovers.length > 0 && catchAlls.length > 0) {
+    // Prefer first catch-all only — avoid printing leftovers on every catch-all.
+    const printer = catchAlls[0]!;
+    bundles.push({
+      printerId: printer.id,
+      printerName: printer.name,
+      lines: leftovers,
+    });
+  }
+
   return bundles;
 }
 

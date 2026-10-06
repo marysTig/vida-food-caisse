@@ -121,15 +121,20 @@ export function PrinterManager() {
       const type = formData.type || "caisse";
       const willEnable = formData.enabled ?? true;
       if (willEnable) {
-        const conflict = printers.find(
+        const othersEnabled = printers.filter(
           (p) => p.enabled && p.type === type && (id === "new" || p.id !== id),
         );
-        if (conflict) {
-          toast.error("Un seul poste par type", {
+        if (type === "caisse" && othersEnabled.length >= 1) {
+          toast.error("Un seul poste Caisse", {
             description:
-              type === "caisse"
-                ? "Désactivez l'imprimante Caisse existante avant d'en activer une autre."
-                : "Désactivez l'imprimante Cuisine existante avant d'en activer une autre.",
+              "Désactivez l'imprimante Caisse existante avant d'en activer une autre.",
+          });
+          return;
+        }
+        if (type === "cuisine" && othersEnabled.length >= 2) {
+          toast.error("Maximum 2 postes Cuisine", {
+            description:
+              "Désactivez une imprimante Cuisine avant d'en activer une troisième.",
           });
           return;
         }
@@ -448,8 +453,12 @@ export function PrinterManager() {
         {isCuisine && (
           <div>
             <label className="mb-2 block text-xs font-semibold text-muted-foreground">
-              Catégories associées (optionnel — vide = toute la cuisine)
+              Catégories associées
             </label>
+            <p className="mb-2 text-[10px] text-muted-foreground">
+              Four / Plaque : choisissez des catégories disjointes. Vide = restes non
+              mappés uniquement (quand une autre Cuisine a déjà des catégories).
+            </p>
             <div className="flex flex-wrap gap-2">
               {categories.map((cat) => {
                 const isSelected = (formData.category_ids || []).includes(cat.id);
@@ -854,7 +863,7 @@ export function PrinterManager() {
                         ))
                       ) : (
                         <span className="text-xs italic text-muted-foreground">
-                          Toutes les catégories (catch-all cuisine)
+                          Toutes les catégories / restes non mappés
                         </span>
                       )}
                     </div>
@@ -893,12 +902,22 @@ export function PrinterManager() {
                   onClick={async () => {
                     const toggle = !printer.enabled;
                     if (toggle) {
-                      const conflict = printers.find(
-                        (p) => p.enabled && p.type === printer.type && p.id !== printer.id,
+                      const othersEnabled = printers.filter(
+                        (p) =>
+                          p.enabled &&
+                          p.type === printer.type &&
+                          p.id !== printer.id,
                       );
-                      if (conflict) {
-                        toast.error("Un seul poste par type", {
-                          description: `Désactivez « ${conflict.name} » d'abord.`,
+                      if (printer.type === "caisse" && othersEnabled.length >= 1) {
+                        toast.error("Un seul poste Caisse", {
+                          description: `Désactivez « ${othersEnabled[0]!.name} » d'abord.`,
+                        });
+                        return;
+                      }
+                      if (printer.type === "cuisine" && othersEnabled.length >= 2) {
+                        toast.error("Maximum 2 postes Cuisine", {
+                          description:
+                            "Désactivez une imprimante Cuisine avant d'en activer une troisième.",
                         });
                         return;
                       }

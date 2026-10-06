@@ -34,7 +34,7 @@ class EscPosBluetoothPrinter {
     const val MAC_SWITCH_SETTLE_MS = 500L
     const val HARD_SETTLE_MS = 700L
     const val PRE_DISCONNECT_DRAIN_MS = 175L
-    const val INTER_PRINTER_GAP_MS = 700L
+    const val INTER_PRINTER_GAP_MS = 900L
     const val RECEIPT_MAC_COOLDOWN_MS = 350L
     const val KEEPALIVE_MS = 20_000L
   }
