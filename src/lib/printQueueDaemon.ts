@@ -36,6 +36,10 @@ import { getPrintersFromStore } from "@/lib/printerStore";
 import { getLocalPrintDeviceId } from "@/lib/printDevice";
 import { isLocalDevicePrimaryHub } from "@/lib/printSettingsStore";
 import { logPrintActivity, updatePrintActivity } from "@/lib/printActivityLog";
+import {
+  isNativePrintWorkerActive,
+  wakeNativePrintWorker,
+} from "@/lib/hubPrintWorkerPlugin";
 
 /** Stall budget = connect/write timeout + margin before force-reset. */
 export const WATCHDOG_MARGIN_MS = 5000;
@@ -54,6 +58,11 @@ function notifyDrain() {
 
 /** Called when a new pending job arrives (realtime). */
 export function wakePrintQueueDaemon() {
+  // Phase 1: native worker owns drain — only wake native + skip JS BT.
+  if (isNativePrintWorkerActive()) {
+    void wakeNativePrintWorker();
+    return;
+  }
   notifyDrain();
   // If kitchen mid-print and receipt pending → abort kitchen for receipt priority
   void (async () => {
@@ -338,6 +347,11 @@ export function startPrintQueueDaemon(): () => void {
         await waitForWake(200);
         continue;
       }
+      // Phase 1 cutover: native worker owns Bluetooth — JS drain idles.
+      if (isNativePrintWorkerActive()) {
+        await waitForWake(2000);
+        continue;
+      }
       if (typeof window === "undefined" || !window.bluetoothSerial) {
         await waitForWake(5000);
         continue;
@@ -359,16 +373,28 @@ export function startPrintQueueDaemon(): () => void {
           } catch {
             /* ignore */
           }
+          // Native may have taken over during settle — do not reclaim/claim.
+          if (isNativePrintWorkerActive()) continue;
           // Immediate reclaim of this device's in-flight jobs (not 2-min stale only).
           await reclaimPrintingJobsForThisDevice(getLocalPrintDeviceId());
         }
+        if (isNativePrintWorkerActive()) continue;
         await reclaimStalePrintingJobs(getLocalPrintDeviceId());
 
-        // Drain one job at a time (single-flight)
-        // eslint-disable-next-line no-constant-condition
-        while (!stopped && isLocalDevicePrimaryHub()) {
+        // Drain one job at a time (single-flight). Re-check native each claim —
+        // startWorker can finish mid-tick and must own the radio alone.
+        while (
+          !stopped &&
+          isLocalDevicePrimaryHub() &&
+          !isNativePrintWorkerActive()
+        ) {
           const job = await claimNextPrintJob();
           if (!job) break;
+          if (isNativePrintWorkerActive()) {
+            // Race: claimed just as native took over — release without attempt++.
+            await requeueInterruptedJob(job.id);
+            break;
+          }
           await processJob(job);
         }
       } catch (e) {

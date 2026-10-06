@@ -5,8 +5,13 @@ const config: CapacitorConfig = {
   appName: 'vida-food-caisse',
   webDir: '.output/public',
   server: {
-    url: 'https://vida-food-caisse.vercel.app/',
-    allowNavigation: ['vida-food-caisse.vercel.app', '*.vercel.app']
+    // Production alias for this Vercel project (vida-food-caisse.vercel.app is owned elsewhere)
+    url: 'https://vida-food-caisse-livid.vercel.app/',
+    allowNavigation: [
+      'vida-food-caisse-livid.vercel.app',
+      'vida-food-caisse.vercel.app',
+      '*.vercel.app',
+    ],
   }
 };
 

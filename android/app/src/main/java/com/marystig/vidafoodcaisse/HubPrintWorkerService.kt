@@ -1,0 +1,194 @@
+package com.marystig.vidafoodcaisse
+
+import android.app.Notification
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
+import android.app.Service
+import android.content.Context
+import android.content.Intent
+import android.content.pm.ServiceInfo
+import android.os.Build
+import android.os.IBinder
+import android.os.PowerManager
+import android.util.Log
+import androidx.core.app.NotificationCompat
+import com.marystig.vidafoodcaisse.print.EscPosBluetoothPrinter
+import com.marystig.vidafoodcaisse.print.PrintJobRepository
+import com.marystig.vidafoodcaisse.print.PrintWorkerLoop
+import com.marystig.vidafoodcaisse.print.WorkerConfig
+import com.marystig.vidafoodcaisse.print.WorkerRuntime
+
+/**
+ * Foreground service that owns RFCOMM + print_jobs drain (Phase 1).
+ */
+class HubPrintWorkerService : Service() {
+  companion object {
+    const val CHANNEL_ID = "hub_print_channel"
+    const val NOTIFICATION_ID = 4202
+    const val ACTION_START = "com.marystig.vidafoodcaisse.action.START_WORKER"
+    const val ACTION_STOP = "com.marystig.vidafoodcaisse.action.STOP_WORKER"
+    private const val TAG = "HubPrintWorkerSvc"
+
+    fun start(ctx: Context) {
+      val i = Intent(ctx, HubPrintWorkerService::class.java).setAction(ACTION_START)
+      androidx.core.content.ContextCompat.startForegroundService(ctx, i)
+    }
+
+    fun stop(ctx: Context) {
+      val i = Intent(ctx, HubPrintWorkerService::class.java).setAction(ACTION_STOP)
+      ctx.startService(i)
+    }
+  }
+
+  private var loop: PrintWorkerLoop? = null
+  private var wakeLock: PowerManager.WakeLock? = null
+
+  override fun onCreate() {
+    super.onCreate()
+    ensureChannel()
+  }
+
+  override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+    when (intent?.action) {
+      ACTION_STOP -> {
+        teardown("stop-action")
+        stopForegroundCompat()
+        stopSelf()
+        return START_NOT_STICKY
+      }
+      else -> {
+        val notification = buildNotification(0, null)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+          startForeground(
+            NOTIFICATION_ID,
+            notification,
+            ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE,
+          )
+        } else {
+          startForeground(NOTIFICATION_ID, notification)
+        }
+        startLoopIfNeeded()
+      }
+    }
+    return START_STICKY
+  }
+
+  private fun startLoopIfNeeded() {
+    if (loop?.isRunning() == true) return
+    if (!WorkerConfig.isConfigured(this) || !WorkerConfig.isEnabled(this)) {
+      Log.w(TAG, "not configured/enabled — stopping")
+      updateNotification(0, "Non configuré")
+      stopForegroundCompat()
+      stopSelf()
+      return
+    }
+    val url = WorkerConfig.supabaseUrl(this)!!
+    val key = WorkerConfig.anonKey(this)!!
+    val deviceId = WorkerConfig.deviceId(this)!!
+
+    acquireWakeLock()
+    val printer = EscPosBluetoothPrinter()
+    val repo = PrintJobRepository(url, key, deviceId)
+    val worker = PrintWorkerLoop(repo, printer) { running, depth, err ->
+      WorkerRuntime.running = running
+      WorkerRuntime.queueDepth = depth
+      WorkerRuntime.lastError = err
+      updateNotification(depth, err)
+    }
+    loop = worker
+    WorkerRuntime.loop = worker
+    worker.start()
+    Log.i(TAG, "worker loop started · device=$deviceId")
+  }
+
+  private fun teardown(reason: String) {
+    Log.i(TAG, "teardown · $reason")
+    loop?.stop()
+    loop = null
+    WorkerRuntime.loop = null
+    WorkerRuntime.running = false
+    WorkerConfig.setEnabled(this, false)
+    releaseWakeLock()
+  }
+
+  private fun acquireWakeLock() {
+    if (wakeLock?.isHeld == true) return
+    val pm = getSystemService(POWER_SERVICE) as PowerManager
+    wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "vidafood:HubPrintWorker")
+      .also {
+        it.setReferenceCounted(false)
+        it.acquire(10 * 60 * 60 * 1000L) // 10h max; renewed by sticky restart
+      }
+  }
+
+  private fun releaseWakeLock() {
+    try {
+      if (wakeLock?.isHeld == true) wakeLock?.release()
+    } catch (_: Exception) {
+      /* ignore */
+    }
+    wakeLock = null
+  }
+
+  override fun onDestroy() {
+    teardown("onDestroy")
+    stopForegroundCompat()
+    super.onDestroy()
+  }
+
+  override fun onBind(intent: Intent?): IBinder? = null
+
+  private fun stopForegroundCompat() {
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+      stopForeground(STOP_FOREGROUND_REMOVE)
+    } else {
+      @Suppress("DEPRECATION")
+      stopForeground(true)
+    }
+  }
+
+  private fun ensureChannel() {
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
+    val channel = NotificationChannel(
+      CHANNEL_ID,
+      "Hub d'impression",
+      NotificationManager.IMPORTANCE_LOW,
+    ).apply {
+      description = "Worker natif d'impression Bluetooth"
+      setShowBadge(false)
+    }
+    getSystemService(NotificationManager::class.java)?.createNotificationChannel(channel)
+  }
+
+  private fun updateNotification(depth: Int, error: String?) {
+    val nm = getSystemService(NotificationManager::class.java) ?: return
+    nm.notify(NOTIFICATION_ID, buildNotification(depth, error))
+  }
+
+  private fun buildNotification(depth: Int, error: String?): Notification {
+    val launch = Intent(this, MainActivity::class.java).apply {
+      flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+    }
+    var piFlags = PendingIntent.FLAG_UPDATE_CURRENT
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+      piFlags = piFlags or PendingIntent.FLAG_IMMUTABLE
+    }
+    val contentIntent = PendingIntent.getActivity(this, 0, launch, piFlags)
+    val status = when {
+      !error.isNullOrBlank() -> "File: $depth · $error"
+      depth > 0 -> "File: $depth · impression…"
+      else -> "File: 0 · OK"
+    }
+    return NotificationCompat.Builder(this, CHANNEL_ID)
+      .setContentTitle("Impression cuisine — hub actif")
+      .setContentText(status)
+      .setSmallIcon(R.mipmap.ic_launcher)
+      .setOngoing(true)
+      .setOnlyAlertOnce(true)
+      .setPriority(NotificationCompat.PRIORITY_LOW)
+      .setCategory(NotificationCompat.CATEGORY_SERVICE)
+      .setContentIntent(contentIntent)
+      .build()
+  }
+}

@@ -11,11 +11,17 @@ import {
   runProductionReceipt,
   runProbeConnect,
 } from "@/lib/bluetoothCoordinator";
+import {
+  isNativePrintWorkerActive,
+  nativeAdminProbe,
+  nativeAdminTestPrint,
+} from "@/lib/hubPrintWorkerPlugin";
 import { openCircuit } from "@/lib/kitchenCircuitBreaker";
 import {
   buildKitchenEscPos,
   buildReceiptEscPos,
   encodeEscPosText,
+  uint8ToBase64,
 } from "@/lib/escposTickets";
 
 declare global {
@@ -41,8 +47,8 @@ export {
   getRadioMode,
 } from "@/lib/bluetoothRadio";
 
-/** Inter-printer gap = hard settle (1.5s) after full adapter shutdown. */
-export const BT_INTER_PRINTER_GAP_MS = 1500;
+/** Inter-printer gap — 2-printer profile (matches INTER_PRINTER_GAP_MS). */
+export const BT_INTER_PRINTER_GAP_MS = 700;
 
 const webConnectedDevices = new Map<string, any>();
 
@@ -136,6 +142,16 @@ export const printerService = {
       if (!printer.mac_address) {
         throw new Error("Adresse MAC manquante. Veuillez d'abord l'associer.");
       }
+      if (isNativePrintWorkerActive()) {
+        const data = new TextEncoder().encode(INIT);
+        const result = await nativeAdminTestPrint(
+          printer.name,
+          printer.mac_address.trim(),
+          uint8ToBase64(data),
+        );
+        if (!result.ok) throw new Error(result.detail);
+        return;
+      }
       // Ping via coordinator (serialized with production jobs)
       await runAdminTestPrint({
         printer,
@@ -198,7 +214,8 @@ export const printerService = {
 
   /**
    * Real Bluetooth reachability check (connect ping + mandatory disconnect).
-   * Routed through bluetoothCoordinator — deferred while print_jobs busy.
+   * Native worker active → plugin adminProbe (same executor as production).
+   * Else → bluetoothCoordinator (deferred while print_jobs busy).
    */
   async verifyPrinterReachable(printer: Printer): Promise<{
     ok: boolean;
@@ -214,6 +231,16 @@ export const printerService = {
     const mac = (printer.mac_address ?? "").trim();
     if (!mac) {
       return { ok: false, detail: "Adresse MAC manquante" };
+    }
+    if (isNativePrintWorkerActive()) {
+      try {
+        return await nativeAdminProbe(printer.name, mac);
+      } catch (err: unknown) {
+        return {
+          ok: false,
+          detail: err instanceof Error ? err.message : String(err),
+        };
+      }
     }
     return runProbeConnect(printer);
   },
@@ -240,6 +267,17 @@ export const printerService = {
 
     const data = this.encodeText(ticket);
     if (this.isNativePlatform()) {
+      if (isNativePrintWorkerActive()) {
+        const mac = (printer.mac_address ?? "").trim();
+        if (!mac) throw new Error("Adresse MAC manquante");
+        const result = await nativeAdminTestPrint(
+          printer.name,
+          mac,
+          uint8ToBase64(data),
+        );
+        if (!result.ok) throw new Error(result.detail);
+        return;
+      }
       await runAdminTestPrint({ printer, data });
     } else {
       await sendWebBluetooth(printer.id, data);

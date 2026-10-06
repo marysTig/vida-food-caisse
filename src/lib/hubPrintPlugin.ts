@@ -1,35 +1,24 @@
-import { Capacitor, registerPlugin } from "@capacitor/core";
+/**
+ * @deprecated Phase 1 — use hubPrintWorkerPlugin.ts.
+ * Kept so older imports resolve; forwards to native worker start/stop.
+ */
 
-export interface HubPrintPlugin {
-  start(): Promise<void>;
-  stop(): Promise<void>;
-}
-
-const HubPrint = registerPlugin<HubPrintPlugin>("HubPrint");
-
-let lastShouldRun: boolean | null = null;
+import {
+  startNativePrintWorker,
+  stopNativePrintWorker,
+} from "@/lib/hubPrintWorkerPlugin";
 
 /**
- * Idempotent start/stop of the Android hub Foreground Service.
- * No-op on web / iOS; swallows native errors so POS never breaks.
+ * Idempotent start/stop of the Android hub print worker (native FGS).
  */
 export async function syncHubForegroundService(shouldRun: boolean): Promise<void> {
-  if (lastShouldRun === shouldRun) return;
-  lastShouldRun = shouldRun;
-
-  if (Capacitor.getPlatform() !== "android") return;
-
   try {
     if (shouldRun) {
-      await HubPrint.start();
-      console.log("[HubPrint] FGS started");
+      await startNativePrintWorker();
     } else {
-      await HubPrint.stop();
-      console.log("[HubPrint] FGS stopped");
+      await stopNativePrintWorker();
     }
   } catch (err) {
     console.warn("[HubPrint] sync failed", err);
-    // Allow retry on next sync
-    lastShouldRun = null;
   }
 }

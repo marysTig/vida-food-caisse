@@ -4,12 +4,13 @@
  * SPP via cordova-plugin-bluetooth-serial (not BLE GATT).
  */
 
-export const BT_HARD_SETTLE_MS = 1500;
+/** 2-printer profile — keep in sync with EscPosBluetoothPrinter. */
+export const BT_HARD_SETTLE_MS = 700;
 /** Extra cool-down after aborting a kitchen connect before opening caisse. */
-export const BT_RECEIPT_PREEMPT_EXTRA_MS = 1000;
+export const BT_RECEIPT_PREEMPT_EXTRA_MS = 250;
 /** Connect+write budget after settle (must cover native SPP + channel-1 fallback). */
-export const BT_OP_TIMEOUT_MS = 20000;
-export const BT_PRE_DISCONNECT_DRAIN_MS = 350;
+export const BT_OP_TIMEOUT_MS = 15000;
+export const BT_PRE_DISCONNECT_DRAIN_MS = 175;
 /** Max wait for disconnect callback before continuing settle. */
 export const BT_DISCONNECT_CALLBACK_CAP_MS = 500;
 

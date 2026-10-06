@@ -21,7 +21,7 @@ public class MainActivity extends BridgeActivity {
 
   @Override
   public void onCreate(Bundle savedInstanceState) {
-    registerPlugin(HubPrintPlugin.class);
+    registerPlugin(HubPrintWorkerPlugin.class);
     super.onCreate(savedInstanceState);
     requestRuntimePermissions();
   }

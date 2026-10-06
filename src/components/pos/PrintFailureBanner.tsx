@@ -7,6 +7,11 @@ import {
   type PrintJob,
 } from "@/lib/kitchenPrintQueue";
 import { wakePrintQueueDaemon } from "@/lib/printQueueDaemon";
+import {
+  isNativePrintWorkerActive,
+  nativeTriggerManualRetry,
+  wakeNativePrintWorker,
+} from "@/lib/hubPrintWorkerPlugin";
 
 /**
  * POS-level banner when print jobs exhausted retries (needs_manual).
@@ -54,6 +59,14 @@ export function PrintFailureBanner() {
     setRetrying(true);
     try {
       const n = await retryAllNeedsManual();
+      if (isNativePrintWorkerActive()) {
+        try {
+          await nativeTriggerManualRetry();
+        } catch {
+          /* JS already reset needs_manual rows */
+        }
+        void wakeNativePrintWorker();
+      }
       toast.success(
         n > 0
           ? `${n} ticket(s) remis en file d'impression`
