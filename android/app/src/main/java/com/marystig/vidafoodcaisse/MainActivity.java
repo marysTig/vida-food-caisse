@@ -24,6 +24,10 @@ public class MainActivity extends BridgeActivity {
     registerPlugin(HubPrintWorkerPlugin.class);
     super.onCreate(savedInstanceState);
     requestRuntimePermissions();
+    // Remote WebView can keep a stale JS bundle after USB deploy — force refresh once.
+    if (getBridge() != null && getBridge().getWebView() != null) {
+      getBridge().getWebView().clearCache(true);
+    }
   }
 
   private void requestRuntimePermissions() {

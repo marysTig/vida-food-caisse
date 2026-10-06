@@ -10,7 +10,7 @@ import {
   type CartItem,
 } from "@/lib/cart";
 import type { GlobalSupplement } from "@/lib/globalSupplementsStore";
-import { getPrintersFromStore, isPrinterEndpointConfigured, type Printer } from "@/lib/printerStore";
+import { getPrintersFromStore, isPrinterEndpointConfigured, resolvePrinterTransport, type Printer } from "@/lib/printerStore";
 import { useTableOrdersStore } from "@/lib/tableOrdersStore";
 import { getLocalPrintDeviceId } from "@/lib/printDevice";
 import {
@@ -393,7 +393,7 @@ export async function enqueueReceipt(
     return { status: "noop", reason: "no_printer" };
   }
 
-  const transport = caisse.transport ?? "bluetooth";
+  const transport = resolvePrinterTransport(caisse);
   const mac =
     transport === "bluetooth" ? (caisse.mac_address ?? "").trim() : null;
   const usbVendorId = transport === "usb" ? caisse.usb_vendor_id : null;

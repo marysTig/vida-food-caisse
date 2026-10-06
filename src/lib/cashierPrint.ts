@@ -2,7 +2,11 @@ import { toast } from "sonner";
 import type { CartItem } from "@/lib/cart";
 import type { GlobalSupplement } from "@/lib/globalSupplementsStore";
 import type { Printer } from "@/lib/printerStore";
-import { isPrinterEndpointConfigured } from "@/lib/printerStore";
+import {
+  fetchPrintersOnce,
+  isPrinterEndpointConfigured,
+  resolvePrinterTransport,
+} from "@/lib/printerStore";
 import { enqueueReceipt } from "@/lib/kitchenPrintQueue";
 import { logPrintActivity } from "@/lib/printActivityLog";
 import { wakePrintQueueDaemon } from "@/lib/printQueueDaemon";
@@ -16,8 +20,8 @@ export type CashierPrintResult = {
 };
 
 /**
- * Encaisser: enqueue receipt only — never awaits Bluetooth.
- * PrintQueueDaemon prints asynchronously with receipt priority.
+ * Encaisser: enqueue receipt only — never awaits Bluetooth/USB I/O.
+ * Always reloads printers from DB so USB config is not lost to a stale Zustand snapshot.
  */
 export async function runCashierReceiptPrint(params: {
   printers: Printer[];
@@ -30,12 +34,31 @@ export async function runCashierReceiptPrint(params: {
   const { items, total, label, globalSupplements } = params;
   const errors: string[] = [];
 
+  // Prefer live DB row (USB VID/PID) over possibly stale React props.
+  let printers = params.printers;
+  try {
+    const fresh = await fetchPrintersOnce();
+    if (fresh.length > 0) printers = fresh;
+  } catch (err) {
+    console.warn("[CAISSE PRINT] fetchPrintersOnce failed — using props", err);
+  }
+
   console.log("[CAISSE PRINT] Enqueue receipt (non-blocking)", {
     itemCount: items.length,
     total,
     label,
     tableId: params.tableId ?? null,
     isHub: isLocalDevicePrimaryHub(),
+    printers: printers.map((p) => ({
+      id: p.id,
+      name: p.name,
+      type: p.type,
+      transport: resolvePrinterTransport(p),
+      usb: `${p.usb_vendor_id}:${p.usb_product_id}`,
+      mac: p.mac_address,
+      enabled: p.enabled,
+      configured: isPrinterEndpointConfigured(p),
+    })),
   });
 
   if (!isLocalDevicePrimaryHub()) {
@@ -46,7 +69,7 @@ export async function runCashierReceiptPrint(params: {
     });
   }
 
-  const cashierPrinters = params.printers.filter(
+  const cashierPrinters = printers.filter(
     (p) => p.enabled && p.type === "caisse",
   );
 
@@ -62,13 +85,15 @@ export async function runCashierReceiptPrint(params: {
   }
 
   const caisse = cashierPrinters[0]!;
+  const transport = resolvePrinterTransport(caisse);
   if (!isPrinterEndpointConfigured(caisse)) {
     const msg =
-      caisse.transport === "usb"
+      transport === "usb"
         ? `${caisse.name}: USB non configuré — sélectionnez le périphérique OTG.`
         : `${caisse.name}: adresse MAC manquante — associez l'imprimante Bluetooth.`;
+    console.error("[CAISSE PRINT] endpoint missing", caisse);
     toast.error(
-      caisse.transport === "usb" ? "USB manquant (caisse)" : "MAC manquante (caisse)",
+      transport === "usb" ? "USB manquant (caisse)" : "MAC manquante (caisse)",
       { description: msg, duration: 7000 },
     );
     return { attempted: 1, succeeded: 0, errors: [msg] };
@@ -82,7 +107,8 @@ export async function runCashierReceiptPrint(params: {
     orderLabel: label,
     items,
     total,
-    printers: params.printers,
+    printers,
+    checkoutTs: Date.now(),
     ...(globalSupplements?.length ? { globalSupplements } : {}),
   });
 
@@ -100,21 +126,32 @@ export async function runCashierReceiptPrint(params: {
     return { attempted: 0, succeeded: 0, errors: [msg] };
   }
 
+  if (result.status === "noop" && result.reason === "duplicate") {
+    // Still wake worker — prior job may be pending/printing.
+    wakePrintQueueDaemon();
+    void wakeNativePrintWorker();
+    toast.info("Ticket déjà en file", {
+      description: caisse.name,
+      duration: 2500,
+    });
+    return { attempted: 1, succeeded: 1, errors: [] };
+  }
+
   logPrintActivity({
     kind: "caisse",
     printerName: caisse.name,
     mac:
-      caisse.transport === "usb"
+      transport === "usb"
         ? `USB ${caisse.usb_vendor_id}:${caisse.usb_product_id}`
         : (caisse.mac_address ?? ""),
     status: "started",
-    detail: `En file · ${label} · ${caisse.transport}`,
+    detail: `En file · ${label} · ${transport}`,
   });
 
   wakePrintQueueDaemon();
   void wakeNativePrintWorker();
   toast.success("Ticket en file d'impression", {
-    description: `${caisse.name} (${caisse.transport === "usb" ? "USB" : "BT"})`,
+    description: `${caisse.name} (${transport === "usb" ? "USB" : "BT"})`,
     duration: 2500,
   });
 

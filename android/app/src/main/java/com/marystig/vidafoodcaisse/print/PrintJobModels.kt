@@ -23,7 +23,9 @@ data class NativePrintJob(
     get() = payload.optJSONObject("fingerprints")
 
   val isUsb: Boolean
-    get() = transport.equals("usb", ignoreCase = true)
+    get() =
+      transport.equals("usb", ignoreCase = true) ||
+        (usbVendorId != null && usbProductId != null)
 
   companion object {
     fun fromJson(row: JSONObject): NativePrintJob {

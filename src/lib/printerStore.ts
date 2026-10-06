@@ -31,9 +31,23 @@ export type Printer = {
   category_ids: string[];
 };
 
+/** Resolve transport, inferring USB from VID/PID when the field is missing/stale. */
+export function resolvePrinterTransport(printer: Printer): PrinterTransport {
+  if (printer.transport === "usb") return "usb";
+  if (
+    printer.usb_vendor_id != null &&
+    printer.usb_product_id != null &&
+    Number.isFinite(printer.usb_vendor_id) &&
+    Number.isFinite(printer.usb_product_id)
+  ) {
+    return "usb";
+  }
+  return "bluetooth";
+}
+
 /** True when the printer has the endpoint data required by its transport. */
 export function isPrinterEndpointConfigured(printer: Printer): boolean {
-  if (printer.transport === "usb") {
+  if (resolvePrinterTransport(printer) === "usb") {
     return (
       printer.usb_vendor_id != null &&
       printer.usb_product_id != null &&
