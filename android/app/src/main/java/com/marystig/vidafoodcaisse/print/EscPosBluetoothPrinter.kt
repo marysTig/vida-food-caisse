@@ -23,10 +23,15 @@ class EscPosBluetoothPrinter {
       UUID.fromString("00001101-0000-1000-8000-00805F9B34FB")
 
     const val OP_TIMEOUT_MS = 15_000L
-    /** Fast-fail SPP UUID — Logcat showed 15s stalls before channel-1. */
-    const val SPP_ATTEMPT_MS = 2_500L
-    const val CHANNEL1_ATTEMPT_MS = 6_000L
+    /** Fast-fail SPP UUID — Logcat showed long stalls before fallback. */
+    const val SPP_ATTEMPT_MS = 3_000L
+    /** Cuisin likes channel-1 (~0.5s); Caisse often needs clean radio — don't burn 6s. */
+    const val CHANNEL1_ATTEMPT_MS = 3_500L
     const val PROBE_ATTEMPT_MS = 2_500L
+    /** Pause after a failed connect mode before trying the other (dirty ACL). */
+    const val INTER_MODE_SETTLE_MS = 450L
+    /** Extra settle when closing a keep-alive session to switch MAC. */
+    const val MAC_SWITCH_SETTLE_MS = 500L
     const val HARD_SETTLE_MS = 700L
     const val PRE_DISCONNECT_DRAIN_MS = 175L
     const val INTER_PRINTER_GAP_MS = 700L
@@ -141,7 +146,10 @@ class EscPosBluetoothPrinter {
       socket = existing!!
       Log.i(TAG, "REUSE · $printerName · $mac")
     } else {
-      if (existing != null || liveMac != null) {
+      val hadLive = existing != null || liveMac != null
+      val switchingMac =
+        hadLive && liveMac != null && liveMac != mac
+      if (hadLive) {
         closeLiveSocket()
       }
       gapMs = applyMacCooldown(mac, isReceipt)
@@ -149,6 +157,11 @@ class EscPosBluetoothPrinter {
         val tSettle = System.currentTimeMillis()
         hardSettle("pre-connect:$printerName")
         settleMs = System.currentTimeMillis() - tSettle
+      } else if (switchingMac) {
+        // Keep-alive close leaves ACL dirty — Logcat: Caisse CHANNEL1 6s fail after Cuisin.
+        Log.i(TAG, "MAC switch settle ${MAC_SWITCH_SETTLE_MS}ms · $printerName")
+        Thread.sleep(MAC_SWITCH_SETTLE_MS)
+        settleMs = MAC_SWITCH_SETTLE_MS
       } else if (lastSuccessMac != null && normalizeMac(lastSuccessMac!!) != mac) {
         Thread.sleep(100)
       }
@@ -229,8 +242,9 @@ class EscPosBluetoothPrinter {
   }
 
   /**
-   * Prefer last successful mode per MAC; default CHANNEL1 (Logcat: SPP often 15s-fails first).
-   * Short SPP timeout; never stack two full OP_TIMEOUT waits.
+   * Prefer last successful mode per MAC; default CHANNEL1 (Cuisin ~0.5s).
+   * After a failed mode, settle briefly before the other — Logcat showed instant
+   * SPP "read ret: -1" when tried immediately after CHANNEL1 timeout.
    */
   @SuppressLint("MissingPermission")
   private fun connectEscPos(
@@ -257,7 +271,13 @@ class EscPosBluetoothPrinter {
       Log.i(TAG, "CONNECTED ${first.name} · $printerName")
       return s
     } catch (firstErr: IOException) {
-      Log.w(TAG, "${first.name} failed · $printerName — trying ${second.name}", firstErr)
+      Log.w(TAG, "${first.name} failed · $printerName — settle then ${second.name}", firstErr)
+      try {
+        socketRef.getAndSet(null)?.close()
+      } catch (_: Exception) {
+        /* ignore */
+      }
+      Thread.sleep(INTER_MODE_SETTLE_MS)
     }
 
     val s = openMode(device, second, if (second == ConnectMode.SPP) sppMs else ch1Ms)

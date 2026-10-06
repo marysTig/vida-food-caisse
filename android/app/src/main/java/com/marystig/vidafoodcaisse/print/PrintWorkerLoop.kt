@@ -23,7 +23,8 @@ class PrintWorkerLoop(
 ) {
   companion object {
     private const val TAG = "PrintWorkerLoop"
-    private const val POLL_IDLE_MS = 450L
+    /** Idle claim interval — Realtime wake covers new jobs; avoid RPC spam. */
+    private const val POLL_IDLE_MS = 2_500L
     private const val RADIO_THREAD = "HubPrintRadio"
     private const val NET_THREAD = "HubPrintNet"
   }

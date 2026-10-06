@@ -36,7 +36,8 @@ class PrintJobRepository(
     const val MAX_ATTEMPTS = 3
     /** 2-printer profile — faster auto-recovery without storming the radio. */
     const val RETRY_BACKOFF_MS = 2500L
-    const val RECEIPT_RETRY_BACKOFF_MS = 450L
+    /** After connect fail, give ACL time before retry (was 450 — too tight). */
+    const val RECEIPT_RETRY_BACKOFF_MS = 1_200L
     const val CLAIM_BATCH_LIMIT = 8
   }
 

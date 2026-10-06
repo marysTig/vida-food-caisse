@@ -4,6 +4,7 @@
  */
 
 import { drainDeferredProbes, onCoordinatorIdle } from "@/lib/bluetoothCoordinator";
+import { isNativePrintWorkerActive } from "@/lib/hubPrintWorkerPlugin";
 import { hasActivePrintJobs } from "@/lib/kitchenPrintQueue";
 import { printerService } from "@/lib/printerService";
 import { getPrintersFromStore, type Printer } from "@/lib/printerStore";
@@ -150,6 +151,12 @@ export async function probeAllPrinters(options?: {
 
   if (options?.skipIfBusyQueue !== false && (await hasActivePrintJobs())) {
     console.log("[BT PROBE] defer — print_jobs pending/printing");
+    // On native hub: never schedule deferred retries — they reconnect after production
+    // and dirty the ACL for the next kitchen→caisse handoff (Logcat 18:17).
+    if (isNativePrintWorkerActive()) {
+      markPrintersBusy(candidates);
+      return;
+    }
     if (options?.forceDeferIfQueueBusy !== false) {
       markPrintersBusy(candidates);
       // Merge into deferred list
@@ -176,14 +183,16 @@ export async function probeAllPrinters(options?: {
     console.log("[BT PROBE] start", { count: printers.length });
     for (const p of printers) {
       // Re-check between printers — production may have started
-      if (await hasActivePrintJobs()) {
-        console.log("[BT PROBE] pause mid-run — queue busy");
+      if (await hasActivePrintJobs() || isNativePrintWorkerActive()) {
+        console.log("[BT PROBE] pause mid-run — queue busy / native worker");
         const remaining = printers.slice(printers.indexOf(p));
         markPrintersBusy(remaining);
-        const byId = new Map(deferredProbePrinters.map((x) => [x.id, x]));
-        for (const r of remaining) byId.set(r.id, r);
-        deferredProbePrinters = [...byId.values()];
-        scheduleDeferredProbeRetry();
+        if (!isNativePrintWorkerActive()) {
+          const byId = new Map(deferredProbePrinters.map((x) => [x.id, x]));
+          for (const r of remaining) byId.set(r.id, r);
+          deferredProbePrinters = [...byId.values()];
+          scheduleDeferredProbeRetry();
+        }
         break;
       }
       await probeOnePrinter(p);
@@ -198,12 +207,17 @@ export async function probeAllPrinters(options?: {
 
 /**
  * Auto-run once per app session (or after cool-down) when this device is hub.
- * Never races production — defers when print_jobs busy.
+ * Never races production — skipped entirely when native HubPrintWorker owns radio.
  */
 export function scheduleHubAutoBluetoothProbe(delayMs = 4000): () => void {
   let cancelled = false;
   const t = window.setTimeout(() => {
     if (cancelled) return;
+    // Native worker owns RFCOMM — deferred JS probes steal radio after kitchen→caisse.
+    if (isNativePrintWorkerActive()) {
+      console.log("[BT PROBE] skip auto — native worker owns radio");
+      return;
+    }
     // Avoid hammering if Admin also mounts and triggers — 30s cool-down
     if (Date.now() - lastAutoProbeAt < 30_000) {
       console.log("[BT PROBE] skip auto — recent probe");
