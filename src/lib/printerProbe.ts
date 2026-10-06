@@ -209,9 +209,11 @@ export function scheduleHubAutoBluetoothProbe(delayMs = 4000): () => void {
       console.log("[BT PROBE] skip auto — recent probe");
       return;
     }
+    // Never steal radio during production burst — defer until queue idle
     void probeAllPrinters({
       skipIfBusyQueue: true,
       forceDeferIfQueueBusy: true,
+      enabledOnly: true,
     });
   }, delayMs);
   return () => {

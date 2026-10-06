@@ -128,48 +128,7 @@ export async function nativeAdminProbe(
   printerName: string,
   macAddress: string,
 ): Promise<{ ok: boolean; detail: string }> {
-  // #region agent log
-  fetch("http://127.0.0.1:7680/ingest/b490126b-dfa2-4a19-9733-3902cacf3768", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "X-Debug-Session-Id": "5eee2c",
-    },
-    body: JSON.stringify({
-      sessionId: "5eee2c",
-      runId: "bt-connect-1",
-      hypothesisId: "D",
-      location: "hubPrintWorkerPlugin.ts:nativeAdminProbe",
-      message: "adminProbe via native worker",
-      data: {
-        printerName,
-        macAddress,
-        nativeDrainActive,
-      },
-      timestamp: Date.now(),
-    }),
-  }).catch(() => {});
-  // #endregion
-  const result = await HubPrintWorker.adminProbe({ printerName, macAddress });
-  // #region agent log
-  fetch("http://127.0.0.1:7680/ingest/b490126b-dfa2-4a19-9733-3902cacf3768", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "X-Debug-Session-Id": "5eee2c",
-    },
-    body: JSON.stringify({
-      sessionId: "5eee2c",
-      runId: "bt-connect-1",
-      hypothesisId: "D",
-      location: "hubPrintWorkerPlugin.ts:nativeAdminProbe:result",
-      message: "adminProbe result",
-      data: { ok: result.ok, detail: result.detail, nativeDrainActive },
-      timestamp: Date.now(),
-    }),
-  }).catch(() => {});
-  // #endregion
-  return result;
+  return HubPrintWorker.adminProbe({ printerName, macAddress });
 }
 
 export async function nativeAdminTestPrint(

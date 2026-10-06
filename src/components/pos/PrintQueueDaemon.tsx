@@ -2,7 +2,6 @@ import { useEffect } from "react";
 import { RealtimeManager, type PostgresPayload } from "@/lib/realtimeManager";
 import { getLocalPrintDeviceId } from "@/lib/printDevice";
 import {
-  isLocalDevicePrimaryHub,
   usePrintSettingsStore,
 } from "@/lib/printSettingsStore";
 import {
@@ -79,8 +78,8 @@ export function PrintQueueDaemon() {
 
       if (!isPrimaryHub || cancelled) return;
 
-      // Auto "Vérifier Bluetooth" on tablet open — no Admin click required.
-      cancelAutoProbe = scheduleHubAutoBluetoothProbe(2500);
+      // Auto probe after hub open — deferred while print_jobs busy (never blocks burst).
+      cancelAutoProbe = scheduleHubAutoBluetoothProbe(8000);
 
       const handlePayload = (payload: PostgresPayload) => {
         if (payload.eventType === "DELETE") return;

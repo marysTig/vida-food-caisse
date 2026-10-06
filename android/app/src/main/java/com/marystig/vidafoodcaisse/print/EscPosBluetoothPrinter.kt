@@ -11,8 +11,8 @@ import java.util.UUID
 import java.util.concurrent.atomic.AtomicReference
 
 /**
- * Classic SPP (RFCOMM) ESC/POS sender — connect → write → drain → disconnect.
- * One socket at a time (single radio). Tuned for 2-printer hubs (caisse + kitchen).
+ * Classic SPP (RFCOMM) ESC/POS sender with same-MAC session keep-alive.
+ * At most one live socket (single radio). Tuned for 2-printer hubs.
  */
 class EscPosBluetoothPrinter {
   companion object {
@@ -26,15 +26,58 @@ class EscPosBluetoothPrinter {
     const val PRE_DISCONNECT_DRAIN_MS = 175L
     const val INTER_PRINTER_GAP_MS = 700L
     const val RECEIPT_MAC_COOLDOWN_MS = 350L
+    /** Keep RFCOMM open for same-MAC burst reuse. */
+    const val KEEPALIVE_MS = 20_000L
   }
 
+  data class SendTiming(
+    val gapMs: Long,
+    val settleMs: Long,
+    val connectMs: Long,
+    val writeMs: Long,
+    val reused: Boolean,
+  )
+
   private val socketRef = AtomicReference<BluetoothSocket?>(null)
+  @Volatile private var liveMac: String? = null
   @Volatile private var lastSuccessMac: String? = null
+  @Volatile private var liveOpenedAt = 0L
   @Volatile private var radioNeedsSettle = false
+  @Volatile private var midWrite = false
+
+  fun isRadioDirty(): Boolean = radioNeedsSettle
+
+  fun wasMidWrite(): Boolean = midWrite
 
   fun forceClose(reason: String) {
     Log.i(TAG, "forceClose · $reason")
     radioNeedsSettle = true
+    midWrite = false
+    closeLiveSocket()
+  }
+
+  fun hardSettle(reason: String) {
+    forceClose(reason)
+    Log.i(TAG, "settle ${HARD_SETTLE_MS}ms · $reason")
+    Thread.sleep(HARD_SETTLE_MS)
+    radioNeedsSettle = false
+  }
+
+  /** Close keep-alive session if idle past KEEPALIVE_MS. */
+  fun closeIfKeepaliveExpired() {
+    val mac = liveMac ?: return
+    val age = System.currentTimeMillis() - liveOpenedAt
+    if (age >= KEEPALIVE_MS) {
+      Log.i(TAG, "keepalive expired · $mac · ${age}ms")
+      closeLiveSocket()
+      // Clean idle close — do not force settle on next same-MAC connect.
+      radioNeedsSettle = false
+    }
+  }
+
+  private fun closeLiveSocket() {
+    liveMac = null
+    liveOpenedAt = 0L
     try {
       socketRef.getAndSet(null)?.close()
     } catch (_: Exception) {
@@ -42,31 +85,29 @@ class EscPosBluetoothPrinter {
     }
   }
 
-  fun hardSettle(reason: String) {
-    forceClose(reason)
-    Log.i(TAG, "settle ${HARD_SETTLE_MS}ms · $reason")
-    Thread.sleep(HARD_SETTLE_MS)
-  }
-
   private fun normalizeMac(mac: String): String =
     mac.trim().uppercase().replace('-', ':')
 
-  private fun applyMacCooldown(nextMac: String, isReceipt: Boolean) {
+  private fun applyMacCooldown(nextMac: String, isReceipt: Boolean): Long {
     val prev = lastSuccessMac?.let { normalizeMac(it) }
     val next = normalizeMac(nextMac)
-    if (prev.isNullOrBlank() || prev == next) return
+    if (prev.isNullOrBlank() || prev == next) return 0L
     val gap = if (isReceipt) RECEIPT_MAC_COOLDOWN_MS else INTER_PRINTER_GAP_MS
     Log.i(TAG, "MAC cooldown ${gap}ms · $prev → $next")
     Thread.sleep(gap)
+    return gap
   }
 
+  /**
+   * Write ESC/POS bytes. Reuses live socket when same MAC within keepalive.
+   */
   @SuppressLint("MissingPermission")
   fun sendEscPos(
     printerName: String,
     macAddress: String,
     dataBase64: String,
     isReceipt: Boolean,
-  ) {
+  ): SendTiming {
     val mac = normalizeMac(macAddress)
     if (mac.isBlank()) throw IOException("Adresse MAC manquante")
 
@@ -76,55 +117,86 @@ class EscPosBluetoothPrinter {
       throw IOException("Le Bluetooth est désactivé sur la tablette !")
     }
 
-    applyMacCooldown(mac, isReceipt)
-    if (radioNeedsSettle) {
-      hardSettle("pre-connect:$printerName")
-    } else {
-      // Soft close only — do not mark settle-needed for a clean handoff.
-      try {
-        socketRef.getAndSet(null)?.close()
-      } catch (_: Exception) {
-        /* ignore */
-      }
-      Thread.sleep(100)
-    }
-
     val raw = Base64.decode(dataBase64, Base64.DEFAULT)
     if (raw.isEmpty()) throw IOException("Payload ESC/POS vide")
 
-    val device: BluetoothDevice = try {
-      resolveBondedDevice(adapter, mac)
-    } catch (e: IllegalArgumentException) {
-      throw IOException("MAC invalide: $mac", e)
+    var gapMs = 0L
+    var settleMs = 0L
+    var connectMs = 0L
+    var reused = false
+
+    val existing = socketRef.get()
+    val canReuse =
+      existing != null &&
+        existing.isConnected &&
+        liveMac == mac &&
+        (System.currentTimeMillis() - liveOpenedAt) < KEEPALIVE_MS &&
+        !radioNeedsSettle
+
+    val socket: BluetoothSocket
+    if (canReuse) {
+      reused = true
+      socket = existing!!
+      Log.i(TAG, "REUSE · $printerName · $mac")
+    } else {
+      if (existing != null || liveMac != null) {
+        closeLiveSocket()
+      }
+      gapMs = applyMacCooldown(mac, isReceipt)
+      if (radioNeedsSettle) {
+        val tSettle = System.currentTimeMillis()
+        hardSettle("pre-connect:$printerName")
+        settleMs = System.currentTimeMillis() - tSettle
+      } else if (lastSuccessMac != null && normalizeMac(lastSuccessMac!!) != mac) {
+        Thread.sleep(100)
+      }
+
+      val device: BluetoothDevice = try {
+        resolveBondedDevice(adapter, mac)
+      } catch (e: IllegalArgumentException) {
+        throw IOException("MAC invalide: $mac", e)
+      }
+
+      Log.i(TAG, "CONNECT START · $printerName · $mac")
+      val tConnect = System.currentTimeMillis()
+      socket = connectEscPos(device, printerName)
+      connectMs = System.currentTimeMillis() - tConnect
+      socketRef.set(socket)
+      liveMac = mac
+      liveOpenedAt = System.currentTimeMillis()
+      Log.i(TAG, "CONNECTED · $printerName · connect_ms=$connectMs")
     }
 
-    Log.i(TAG, "CONNECT START · $printerName · $mac")
-    val socket = connectEscPos(device, printerName)
-    socketRef.set(socket)
-
+    val tWrite = System.currentTimeMillis()
+    midWrite = true
     try {
-      Log.i(TAG, "CONNECTED · $printerName")
       val out = socket.outputStream
       out.write(raw)
       out.flush()
-      Log.i(TAG, "SEND COMPLETE · $printerName · bytes=${raw.size}")
       if (!isReceipt) {
         Thread.sleep(PRE_DISCONNECT_DRAIN_MS)
       }
-    } finally {
-      try {
-        socket.close()
-      } catch (_: Exception) {
-        /* ignore */
-      }
-      socketRef.compareAndSet(socket, null)
-      Log.i(TAG, "DISCONNECTED · $printerName")
+    } catch (e: Exception) {
+      midWrite = false
+      forceClose("write-fail:$printerName")
+      throw e
     }
+    midWrite = false
 
+    val writeMs = System.currentTimeMillis() - tWrite
     lastSuccessMac = mac
+    liveMac = mac
+    liveOpenedAt = System.currentTimeMillis()
     radioNeedsSettle = false
+    Log.i(
+      TAG,
+      "SEND COMPLETE · $printerName · bytes=${raw.size} · reuse=$reused · " +
+        "gap_ms=$gapMs settle_ms=$settleMs connect_ms=$connectMs write_ms=$writeMs",
+    )
+    return SendTiming(gapMs, settleMs, connectMs, writeMs, reused)
   }
 
+  /** Reachability probe — one settle, closes session afterward. */
   @SuppressLint("MissingPermission")
   fun probeConnect(printerName: String, macAddress: String) {
     val mac = normalizeMac(macAddress)
@@ -138,17 +210,14 @@ class EscPosBluetoothPrinter {
     val device = resolveBondedDevice(adapter, mac)
     val socket = connectEscPos(device, printerName)
     socketRef.set(socket)
+    liveMac = mac
     try {
       lastSuccessMac = mac
       radioNeedsSettle = false
     } finally {
-      try {
-        socket.close()
-      } catch (_: Exception) {
-        /* ignore */
-      }
-      socketRef.compareAndSet(socket, null)
-      hardSettle("probe-done:$printerName")
+      closeLiveSocket()
+      // Leave dirty so next production connect settles once if needed soon after.
+      radioNeedsSettle = true
     }
   }
 

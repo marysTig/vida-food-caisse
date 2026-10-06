@@ -15,6 +15,7 @@ import java.util.concurrent.TimeUnit
 
 /**
  * Supabase PostgREST client for print_jobs (+ kitchen fingerprint patch).
+ * Network-only — never call from the radio thread for claim/ack/fingerprints.
  */
 class PrintJobRepository(
   private val baseUrl: String,
@@ -36,6 +37,7 @@ class PrintJobRepository(
     /** 2-printer profile — faster auto-recovery without storming the radio. */
     const val RETRY_BACKOFF_MS = 2500L
     const val RECEIPT_RETRY_BACKOFF_MS = 450L
+    const val CLAIM_BATCH_LIMIT = 8
   }
 
   private fun authHeaders(builder: Request.Builder): Request.Builder =
@@ -82,6 +84,21 @@ class PrintJobRepository(
     }
   }
 
+  private fun postRpc(name: String, json: JSONObject): String {
+    val req = authHeaders(
+      Request.Builder()
+        .url("$rest/rpc/$name")
+        .post(json.toString().toRequestBody(jsonMedia)),
+    ).build()
+    client.newCall(req).execute().use { resp ->
+      val body = resp.body?.string().orEmpty()
+      if (!resp.isSuccessful) {
+        throw IllegalStateException("RPC $name → ${resp.code}: $body")
+      }
+      return body
+    }
+  }
+
   fun countActiveJobs(): Int {
     return try {
       val body = get(
@@ -92,13 +109,6 @@ class PrintJobRepository(
       Log.w(TAG, "countActiveJobs failed", e)
       0
     }
-  }
-
-  fun hasPendingReceipt(): Boolean {
-    val body = get(
-      "/print_jobs?select=id&job_type=eq.receipt&status=in.(pending,printing)&limit=1",
-    )
-    return JSONArray(body).length() > 0
   }
 
   fun reclaimPrintingForDevice() {
@@ -145,41 +155,27 @@ class PrintJobRepository(
     }
   }
 
-  fun claimNext(): NativePrintJob? {
-    // OkHttp HttpUrl encodes query values — pass raw ISO, do not pre-encode.
-    val now = nowIso()
-    val receiptHold = hasPendingReceipt()
-    var path =
-      "/print_jobs?select=*&status=eq.pending&next_attempt_at=lte.$now" +
-        "&order=priority.desc,created_at.asc&limit=5"
-    if (receiptHold) {
-      path += "&job_type=eq.receipt"
+  /**
+   * Atomic batch claim via Postgres RPC. Receipt-hold is enforced server-side.
+   */
+  fun claimBatch(limit: Int = CLAIM_BATCH_LIMIT): List<NativePrintJob> {
+    val t0 = System.currentTimeMillis()
+    val body = postRpc(
+      "claim_print_jobs",
+      JSONObject()
+        .put("p_device_id", deviceId)
+        .put("p_limit", limit),
+    )
+    val arr = JSONArray(body)
+    val out = ArrayList<NativePrintJob>(arr.length())
+    for (i in 0 until arr.length()) {
+      out.add(NativePrintJob.fromJson(arr.getJSONObject(i)))
     }
-    val candidates = JSONArray(get(path))
-    if (candidates.length() == 0) return null
-
-    for (i in 0 until candidates.length()) {
-      val row = candidates.getJSONObject(i)
-      val id = row.getString("id")
-      val update = JSONObject()
-        .put("status", "printing")
-        .put("claimed_by_device_id", deviceId)
-        .put("updated_at", nowIso())
-        .put("error", JSONObject.NULL)
-      try {
-        val result = patch(
-          "/print_jobs?id=eq.$id&status=eq.pending",
-          update,
-        )
-        val arr = JSONArray(result)
-        if (arr.length() > 0) {
-          return NativePrintJob.fromJson(arr.getJSONObject(0))
-        }
-      } catch (e: Exception) {
-        Log.w(TAG, "claim race on $id", e)
-      }
-    }
-    return null
+    Log.i(
+      TAG,
+      "claimBatch · n=${out.size} · claim_ms=${System.currentTimeMillis() - t0}",
+    )
+    return out
   }
 
   fun markDone(jobId: String) {
@@ -257,23 +253,12 @@ class PrintJobRepository(
     }
   }
 
-  fun heartbeat(jobId: String) {
-    try {
-      patch(
-        "/print_jobs?id=eq.$jobId&status=eq.printing",
-        JSONObject().put("updated_at", nowIso()),
-      )
-    } catch (e: Exception) {
-      Log.w(TAG, "heartbeat failed", e)
-    }
-  }
-
   /**
    * Patch kitchen fingerprints on table_orders.items so deltas do not reprint.
+   * NetExecutor only — never block the radio thread.
    */
   fun patchKitchenFingerprints(tableId: String, fingerprints: JSONObject) {
     if (fingerprints.length() == 0) return
-    // UUID check — skip anon scopes
     val uuidRe =
       Regex("^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$", RegexOption.IGNORE_CASE)
     if (!uuidRe.matches(tableId)) {

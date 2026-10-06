@@ -11,9 +11,10 @@ import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 
 /**
- * Single-thread FIFO drain: claim → RFCOMM print → done/retry.
- * Admin BT ops are drained inside the loop (same thread) so they never
- * queue behind the forever-running loop task.
+ * Split radio / net drain:
+ * - Radio thread: take local job → RFCOMM write → enqueue ack (no HTTP)
+ * - Net thread: claimBatch RPC → local queue; drain acks → markDone / retry / fingerprints
+ * Admin BT ops run on the radio thread via adminQueue.
  */
 class PrintWorkerLoop(
   private val repo: PrintJobRepository,
@@ -22,21 +23,50 @@ class PrintWorkerLoop(
 ) {
   companion object {
     private const val TAG = "PrintWorkerLoop"
-    /** 2-printer profile — snappy claim between jobs; Realtime wake covers idle. */
-    private const val POLL_BUSY_MS = 120L
     private const val POLL_IDLE_MS = 450L
-    private const val WORKER_THREAD = "HubPrintWorker"
+    private const val RADIO_THREAD = "HubPrintRadio"
+    private const val NET_THREAD = "HubPrintNet"
+  }
+
+  private sealed class Ack {
+    data class Done(
+      val job: NativePrintJob,
+      val finishedAt: Long,
+    ) : Ack()
+
+    data class Fail(
+      val job: NativePrintJob,
+      val message: String,
+      val finishedAt: Long,
+    ) : Ack()
+
+    data class Preempt(
+      val job: NativePrintJob,
+      val finishedAt: Long,
+    ) : Ack()
+
+    data class BadPayload(
+      val job: NativePrintJob,
+      val message: String,
+      val finishedAt: Long,
+    ) : Ack()
   }
 
   private val running = AtomicBoolean(false)
   private val wake = AtomicBoolean(false)
   private val lastError = AtomicReference<String?>(null)
-  private var executor: ExecutorService? = null
+  private val localQueue = LocalPrintQueue()
+  private val ackQueue = LinkedBlockingQueue<Ack>()
   private val adminQueue = LinkedBlockingQueue<() -> Unit>()
+
+  private var radioExecutor: ExecutorService? = null
+  private var netExecutor: ExecutorService? = null
 
   fun isRunning(): Boolean = running.get()
 
   fun getLastError(): String? = lastError.get()
+
+  fun localQueueDepth(): Int = localQueue.depth()
 
   fun wake() {
     wake.set(true)
@@ -45,36 +75,45 @@ class PrintWorkerLoop(
   fun start() {
     if (!running.compareAndSet(false, true)) return
     printer.forceClose("loop-start")
-    val exec = Executors.newSingleThreadExecutor { r ->
-      Thread(r, "HubPrintWorker").apply { isDaemon = true }
+
+    val radio = Executors.newSingleThreadExecutor { r ->
+      Thread(r, RADIO_THREAD).apply { isDaemon = true }
     }
-    executor = exec
-    // Network + reclaim must not run on the main thread (startup DNS race).
-    exec.execute {
+    val net = Executors.newSingleThreadExecutor { r ->
+      Thread(r, NET_THREAD).apply { isDaemon = true }
+    }
+    radioExecutor = radio
+    netExecutor = net
+
+    net.execute {
       try {
         repo.reclaimPrintingForDevice()
         onStatus(true, repo.countActiveJobs(), null)
       } catch (e: Exception) {
         Log.w(TAG, "startup reclaim failed", e)
       }
-      loop()
+      netLoop()
     }
+    radio.execute { radioLoop() }
     onStatus(true, 0, null)
-    Log.i(TAG, "started")
+    Log.i(TAG, "started · radio+net split")
   }
 
   fun stop() {
     running.set(false)
     wake.set(true)
-    executor?.shutdownNow()
-    executor = null
+    radioExecutor?.shutdownNow()
+    netExecutor?.shutdownNow()
+    radioExecutor = null
+    netExecutor = null
     printer.forceClose("loop-stop")
     onStatus(false, 0, lastError.get())
     Log.i(TAG, "stopped")
   }
 
   fun triggerManualRetry() {
-    runOnExecutor {
+    // Net work — schedule on net executor
+    netExecutor?.execute {
       try {
         val n = repo.retryAllNeedsManual()
         Log.i(TAG, "manual retry enqueued $n")
@@ -83,15 +122,23 @@ class PrintWorkerLoop(
         lastError.set(e.message)
         Log.w(TAG, "manual retry failed", e)
       }
+    } ?: runOnRadio {
+      try {
+        val n = repo.retryAllNeedsManual()
+        Log.i(TAG, "manual retry enqueued $n")
+        wake()
+      } catch (e: Exception) {
+        lastError.set(e.message)
+      }
     }
   }
 
-  /** Run Admin probe on the same thread as production prints. */
+  /** Run Admin probe on the radio thread. */
   fun adminProbe(printerName: String, mac: String): Pair<Boolean, String> {
-    return runOnExecutorBlocking {
+    return runOnRadioBlocking {
       try {
-        if (repo.countActiveJobs() > 0) {
-          return@runOnExecutorBlocking false to "File d'impression active — probe différé"
+        if (localQueue.depth() > 0 || repo.countActiveJobs() > 0) {
+          return@runOnRadioBlocking false to "File d'impression active — probe différé"
         }
         printer.probeConnect(printerName, mac)
         true to "Joignable (ping OK)"
@@ -102,8 +149,11 @@ class PrintWorkerLoop(
   }
 
   fun adminTestPrint(printerName: String, mac: String, escposBase64: String): Pair<Boolean, String> {
-    return runOnExecutorBlocking {
+    return runOnRadioBlocking {
       try {
+        if (localQueue.depth() > 0) {
+          return@runOnRadioBlocking false to "File d'impression active — test différé"
+        }
         printer.sendEscPos(printerName, mac, escposBase64, isReceipt = true)
         true to "OK"
       } catch (e: Exception) {
@@ -113,8 +163,8 @@ class PrintWorkerLoop(
     }
   }
 
-  private fun runOnExecutor(block: () -> Unit) {
-    if (Thread.currentThread().name == WORKER_THREAD) {
+  private fun runOnRadio(block: () -> Unit) {
+    if (Thread.currentThread().name == RADIO_THREAD) {
       block()
       return
     }
@@ -122,8 +172,8 @@ class PrintWorkerLoop(
     wake()
   }
 
-  private fun <T> runOnExecutorBlocking(block: () -> T): T {
-    if (Thread.currentThread().name == WORKER_THREAD) return block()
+  private fun <T> runOnRadioBlocking(block: () -> T): T {
+    if (Thread.currentThread().name == RADIO_THREAD) return block()
     val latch = CountDownLatch(1)
     val result = AtomicReference<Any?>()
     val error = AtomicReference<Exception?>()
@@ -156,75 +206,189 @@ class PrintWorkerLoop(
     }
   }
 
-  private fun loop() {
+  private fun netLoop() {
+    var lastStaleCheck = 0L
+    while (running.get()) {
+      try {
+        drainAcks()
+        val now = System.currentTimeMillis()
+        if (now - lastStaleCheck > 15_000L) {
+          lastStaleCheck = now
+          try {
+            repo.reclaimStalePrinting()
+          } catch (e: Exception) {
+            Log.w(TAG, "stale reclaim failed", e)
+          }
+        }
+
+        val needClaim = localQueue.isEmpty() || wake.compareAndSet(true, false)
+        if (needClaim || localQueue.depth() < 3) {
+          val t0 = System.currentTimeMillis()
+          val batch = try {
+            repo.claimBatch()
+          } catch (e: Exception) {
+            Log.w(TAG, "claimBatch failed", e)
+            lastError.set(e.message)
+            emptyList()
+          }
+          if (batch.isNotEmpty()) {
+            val added = localQueue.offerAll(batch)
+            Log.i(
+              TAG,
+              "net claim · batch=${batch.size} added=$added local=${localQueue.depth()} " +
+                "claim_ms=${System.currentTimeMillis() - t0}",
+            )
+            wake.set(true) // nudge radio
+          }
+        }
+
+        onStatus(true, localQueue.depth(), lastError.get())
+        sleepInterruptible(if (localQueue.isEmpty()) POLL_IDLE_MS else 80L)
+      } catch (e: InterruptedException) {
+        Thread.currentThread().interrupt()
+        break
+      } catch (e: Exception) {
+        Log.e(TAG, "net loop error", e)
+        lastError.set(e.message)
+        sleepInterruptible(1000)
+      }
+    }
+  }
+
+  private fun drainAcks() {
+    while (true) {
+      val ack = ackQueue.poll() ?: break
+      val lag = System.currentTimeMillis() - when (ack) {
+        is Ack.Done -> ack.finishedAt
+        is Ack.Fail -> ack.finishedAt
+        is Ack.Preempt -> ack.finishedAt
+        is Ack.BadPayload -> ack.finishedAt
+      }
+      try {
+        when (ack) {
+          is Ack.Done -> {
+            repo.markDone(ack.job.id)
+            Log.i(TAG, "ack done · ${ack.job.id.take(8)} · ack_lag_ms=$lag")
+            if (ack.job.jobType != "receipt") {
+              val fps = ack.job.fingerprints
+              val tableId = ack.job.tableId
+              if (fps != null && !tableId.isNullOrBlank()) {
+                try {
+                  repo.patchKitchenFingerprints(tableId, fps)
+                } catch (e: Exception) {
+                  Log.w(TAG, "fingerprint async failed", e)
+                }
+              }
+            }
+            lastError.set(null)
+          }
+          is Ack.Fail -> {
+            val nextAttempt = ack.job.attemptCount + 1
+            val backoff =
+              if (ack.job.jobType == "receipt") PrintJobRepository.RECEIPT_RETRY_BACKOFF_MS
+              else PrintJobRepository.RETRY_BACKOFF_MS
+            repo.scheduleRetry(ack.job.id, nextAttempt, ack.message, backoff)
+            Log.i(TAG, "ack fail · ${ack.job.id.take(8)} · ack_lag_ms=$lag")
+          }
+          is Ack.Preempt -> {
+            // Job stays in local kitchen front; release DB claim so reclaim is clean
+            // if process dies — but keep printing status until re-taken would double-claim.
+            // Local requeue already holds the job; leave status=printing until Done/Fail.
+            Log.i(TAG, "ack preempt local · ${ack.job.id.take(8)} · ack_lag_ms=$lag")
+          }
+          is Ack.BadPayload -> {
+            repo.scheduleRetry(ack.job.id, 99, ack.message, 0)
+            lastError.set(ack.message)
+          }
+        }
+      } catch (e: Exception) {
+        Log.e(TAG, "ack processing failed", e)
+        lastError.set(e.message)
+        // Re-offer once later
+        if (ack is Ack.Done) {
+          ackQueue.offer(ack)
+          break
+        }
+      }
+    }
+  }
+
+  private fun radioLoop() {
     while (running.get()) {
       try {
         drainAdminOps()
-        repo.reclaimStalePrinting()
-        val job = repo.claimNext()
+        printer.closeIfKeepaliveExpired()
+
+        // Prefer receipts already in local queue (preempt kitchen start)
+        var job = localQueue.take()
         if (job == null) {
           onStatus(true, 0, lastError.get())
           sleepInterruptible(POLL_IDLE_MS)
           continue
         }
-        onStatus(true, repo.countActiveJobs() + 1, lastError.get())
-        processJob(job)
-        drainAdminOps()
-        sleepInterruptible(POLL_BUSY_MS)
+
+        // If we took kitchen but a receipt arrived, put kitchen back and take receipt
+        if (job.jobType != "receipt" && localQueue.hasReceipt()) {
+          Log.i(TAG, "local preempt — receipt waiting, requeue kitchen ${job.id.take(8)}")
+          localQueue.requeueKitchenFront(job)
+          job = localQueue.take() ?: continue
+        }
+
+        onStatus(true, localQueue.depth() + 1, lastError.get())
+        processRadioJob(job)
+        // No busy poll when more work is local
+        if (localQueue.isEmpty()) {
+          sleepInterruptible(0)
+        }
       } catch (e: InterruptedException) {
         Thread.currentThread().interrupt()
         break
       } catch (e: Exception) {
-        Log.e(TAG, "drain error", e)
+        Log.e(TAG, "radio loop error", e)
         lastError.set(e.message)
-        onStatus(true, repo.countActiveJobs(), e.message)
-        sleepInterruptible(2000)
+        sleepInterruptible(500)
       }
     }
   }
 
-  private fun processJob(job: NativePrintJob) {
+  private fun processRadioJob(job: NativePrintJob) {
     val name = job.printerName ?: "imprimante"
     val mac = job.macAddress
     val b64 = job.escposBase64
-    Log.i(TAG, "PRINT START · ${job.jobType} → $name")
+    val depth = localQueue.depth()
+    Log.i(TAG, "PRINT START · ${job.jobType} → $name · queue_depth=$depth")
 
     if (mac.isNullOrBlank() || b64.isNullOrBlank()) {
-      repo.scheduleRetry(job.id, 99, "Payload ou MAC manquant", 0)
-      lastError.set("Payload ou MAC manquant")
+      ackQueue.offer(Ack.BadPayload(job, "Payload ou MAC manquant", System.currentTimeMillis()))
+      wake()
       return
     }
 
     val isReceipt = job.jobType == "receipt"
 
-    // Before kitchen write, abort if receipt arrived
-    if (!isReceipt && repo.hasPendingReceipt()) {
-      Log.i(TAG, "receipt pending — requeue kitchen ${job.id}")
-      repo.requeueInterrupted(job.id)
-      printer.hardSettle("receipt-preempt")
+    // Kitchen: if receipt is already local, preempt before connect
+    if (!isReceipt && localQueue.hasReceipt()) {
+      Log.i(TAG, "receipt in local queue — requeue kitchen ${job.id.take(8)}")
+      localQueue.requeueKitchenFront(job)
+      if (printer.isRadioDirty() || printer.wasMidWrite()) {
+        printer.hardSettle("receipt-preempt")
+      }
+      ackQueue.offer(Ack.Preempt(job, System.currentTimeMillis()))
+      wake()
       return
     }
 
     try {
-      repo.heartbeat(job.id)
-      // Re-check after heartbeat — receipt may have been enqueued mid-flight.
-      if (!isReceipt && repo.hasPendingReceipt()) {
-        Log.i(TAG, "receipt pending post-heartbeat — requeue kitchen ${job.id}")
-        repo.requeueInterrupted(job.id)
-        printer.hardSettle("receipt-preempt")
-        return
-      }
-      printer.sendEscPos(name, mac, b64, isReceipt)
-      repo.markDone(job.id)
-      if (!isReceipt) {
-        val fps = job.fingerprints
-        val tableId = job.tableId
-        if (fps != null && !tableId.isNullOrBlank()) {
-          repo.patchKitchenFingerprints(tableId, fps)
-        }
-      }
-      lastError.set(null)
-      Log.i(TAG, "PRINT END OK · $name")
+      val timing = printer.sendEscPos(name, mac, b64, isReceipt)
+      // Mid-write receipt: check after write — next iteration will prefer receipt
+      ackQueue.offer(Ack.Done(job, System.currentTimeMillis()))
+      wake()
+      Log.i(
+        TAG,
+        "PRINT END OK · $name · reuse=${timing.reused} · " +
+          "gap=${timing.gapMs} settle=${timing.settleMs} " +
+          "connect=${timing.connectMs} write=${timing.writeMs}",
+      )
     } catch (e: Exception) {
       val msg = e.message ?: "Erreur impression"
       Log.e(TAG, "PRINT FAIL · $name · $msg", e)
@@ -234,25 +398,27 @@ class PrintWorkerLoop(
       } catch (_: Exception) {
         /* ignore */
       }
-      // If receipt appeared mid-kitchen, treat as preempt (no attempt++)
-      if (!isReceipt && repo.hasPendingReceipt()) {
-        repo.requeueInterrupted(job.id)
-        return
+      // If receipt arrived locally during fail, treat as preempt (no attempt++)
+      if (!isReceipt && localQueue.hasReceipt()) {
+        localQueue.requeueKitchenFront(job)
+        ackQueue.offer(Ack.Preempt(job, System.currentTimeMillis()))
+      } else {
+        ackQueue.offer(Ack.Fail(job, msg, System.currentTimeMillis()))
       }
-      val nextAttempt = job.attemptCount + 1
-      val backoff =
-        if (isReceipt) PrintJobRepository.RECEIPT_RETRY_BACKOFF_MS
-        else PrintJobRepository.RETRY_BACKOFF_MS
-      repo.scheduleRetry(job.id, nextAttempt, msg, backoff)
+      wake()
     }
   }
 
   private fun sleepInterruptible(ms: Long) {
+    if (ms <= 0L) {
+      if (wake.compareAndSet(true, false)) return
+      return
+    }
     val end = System.currentTimeMillis() + ms
     while (running.get() && System.currentTimeMillis() < end) {
       if (wake.compareAndSet(true, false)) return
       try {
-        Thread.sleep(100)
+        Thread.sleep(50)
       } catch (_: InterruptedException) {
         Thread.currentThread().interrupt()
         return
