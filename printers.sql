@@ -3,7 +3,7 @@
 CREATE TABLE IF NOT EXISTS public.printers (
     id uuid DEFAULT gen_random_uuid() PRIMARY KEY,
     name text NOT NULL,
-    type text NOT NULL CHECK (type IN ('caisse', 'plaque', 'four')),
+    type text NOT NULL CHECK (type IN ('caisse', 'cuisine')),
     mac_address text,
     enabled boolean DEFAULT true,
     categories text[] DEFAULT '{}',

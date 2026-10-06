@@ -363,12 +363,15 @@ export const printerService = {
 
     const categoryIds = new Set(printer.category_ids ?? []);
     const legacyNames = new Set(printer.categories ?? []);
-    const filteredItems = items.filter((item) => {
-      const catId = item.product.categoryId;
-      if (catId && categoryIds.size > 0) return categoryIds.has(catId);
-      if (legacyNames.size > 0) return legacyNames.has(item.product.category);
-      return false;
-    });
+    const catchAll = categoryIds.size === 0 && legacyNames.size === 0;
+    const filteredItems = catchAll
+      ? items
+      : items.filter((item) => {
+          const catId = item.product.categoryId;
+          if (catId && categoryIds.size > 0) return categoryIds.has(catId);
+          if (legacyNames.size > 0) return legacyNames.has(item.product.category);
+          return false;
+        });
 
     if (filteredItems.length === 0) {
       throw new Error(

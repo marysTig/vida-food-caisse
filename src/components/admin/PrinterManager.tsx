@@ -116,20 +116,38 @@ export function PrinterManager() {
 
   const handleSave = async (id: string) => {
     try {
+      const type = formData.type || "caisse";
+      const willEnable = formData.enabled ?? true;
+      if (willEnable) {
+        const conflict = printers.find(
+          (p) => p.enabled && p.type === type && (id === "new" || p.id !== id),
+        );
+        if (conflict) {
+          toast.error("Un seul poste par type", {
+            description:
+              type === "caisse"
+                ? "Désactivez l'imprimante Caisse existante avant d'en activer une autre."
+                : "Désactivez l'imprimante Cuisine existante avant d'en activer une autre.",
+          });
+          return;
+        }
+      }
+
       if (id === "new") {
         await addPrinter({
           name: formData.name || "",
-          type: formData.type || "caisse",
+          type,
           mac_address: formData.mac_address ?? null,
-          enabled: formData.enabled ?? true,
+          enabled: willEnable,
           categories: [],
-          category_ids: formData.category_ids ?? [],
+          category_ids: type === "caisse" ? [] : (formData.category_ids ?? []),
         });
       } else {
         await updatePrinter(id, {
           ...formData,
+          type,
           categories: [],
-          category_ids: formData.category_ids ?? [],
+          category_ids: type === "caisse" ? [] : (formData.category_ids ?? []),
         });
       }
       setEditingId(null);
@@ -188,7 +206,7 @@ export function PrinterManager() {
 
   const renderForm = (printer?: Printer) => {
     const isNew = !printer;
-    const isPlaqueOrFour = formData.type === "plaque" || formData.type === "four";
+    const isCuisine = formData.type === "cuisine";
 
     return (
       <div className="rounded-xl border border-border bg-card p-4 space-y-4 shadow-sm mb-4">
@@ -217,9 +235,8 @@ export function PrinterManager() {
               }}
               className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground focus:border-primary focus:outline-none"
             >
-              <option value="caisse">Caisse (Générale)</option>
-              <option value="plaque">Plaque</option>
-              <option value="four">Four</option>
+              <option value="caisse">Caisse (Reçus)</option>
+              <option value="cuisine">Cuisine</option>
             </select>
           </div>
         </div>
@@ -283,10 +300,10 @@ export function PrinterManager() {
           </div>
         )}
 
-        {isPlaqueOrFour && (
+        {isCuisine && (
           <div>
             <label className="mb-2 block text-xs font-semibold text-muted-foreground">
-              Catégories associées (par ID — impression filtrée)
+              Catégories associées (optionnel — vide = toute la cuisine)
             </label>
             <div className="flex flex-wrap gap-2">
               {categories.map((cat) => {
@@ -347,7 +364,7 @@ export function PrinterManager() {
             <div>
               <h3 className="font-bold text-foreground">Hub d&apos;impression cuisine</h3>
               <p className="text-xs text-muted-foreground mt-0.5">
-                Un seul appareil (tablette caisse principale) exécute les tickets plaque/four via
+                Un seul appareil (tablette caisse principale) exécute les tickets cuisine via
                 Bluetooth. Les autres sessions n&apos;envoient que des jobs en file d&apos;attente.
               </p>
               <p className="mt-2 font-mono text-[11px] text-muted-foreground break-all">
@@ -446,10 +463,10 @@ export function PrinterManager() {
           >
             <option value="">— Aucune (réimpression manuelle uniquement) —</option>
             {printers
-              .filter((p) => p.enabled && (p.type === "plaque" || p.type === "four" || p.type === "caisse"))
+              .filter((p) => p.enabled && (p.type === "cuisine" || p.type === "caisse"))
               .map((p) => (
                 <option key={p.id} value={p.id}>
-                  {p.name} ({p.type})
+                  {p.name} ({p.type === "caisse" ? "Caisse" : "Cuisine"})
                 </option>
               ))}
           </select>
@@ -515,7 +532,7 @@ export function PrinterManager() {
                         try {
                           // Clear circuits for kitchen printers so retry can connect
                           for (const p of printers) {
-                            if (p.type === "plaque" || p.type === "four") {
+                            if (p.type === "cuisine") {
                               closeCircuit(p.mac_address);
                             }
                           }
@@ -601,9 +618,7 @@ export function PrinterManager() {
           const isOk = reach.status === "ok";
           const isChecking = reach.status === "checking";
           const isBusy = reach.status === "busy";
-          const missingCats =
-            (printer.type === "plaque" || printer.type === "four") &&
-            (!printer.category_ids || printer.category_ids.length === 0);
+          const typeLabel = printer.type === "caisse" ? "Caisse" : "Cuisine";
 
           return (
             <div
@@ -619,7 +634,7 @@ export function PrinterManager() {
                   </div>
                   <div>
                     <h3 className="font-bold text-foreground">{printer.name}</h3>
-                    <p className="text-xs text-muted-foreground capitalize">Poste : {printer.type}</p>
+                    <p className="text-xs text-muted-foreground">Poste : {typeLabel}</p>
                     <p className="text-[10px] font-mono text-muted-foreground mt-0.5">
                       {printer.mac_address || "MAC manquante"}
                     </p>
@@ -669,7 +684,7 @@ export function PrinterManager() {
               </div>
 
               <div className="flex-1 p-4">
-                {printer.type === "plaque" || printer.type === "four" ? (
+                {printer.type === "cuisine" ? (
                   <div>
                     <p className="text-xs font-semibold text-muted-foreground mb-1.5">
                       Catégories filtrées :
@@ -685,16 +700,11 @@ export function PrinterManager() {
                           </span>
                         ))
                       ) : (
-                        <span className="text-xs italic text-destructive">
-                          Aucune catégorie — les commandes seront bloquées pour ces produits
+                        <span className="text-xs italic text-muted-foreground">
+                          Toutes les catégories (catch-all cuisine)
                         </span>
                       )}
                     </div>
-                    {missingCats && (
-                      <p className="mt-2 text-[11px] text-destructive">
-                        Associez au moins une catégorie menu.
-                      </p>
-                    )}
                   </div>
                 ) : (
                   <p className="text-xs text-muted-foreground">
@@ -729,6 +739,17 @@ export function PrinterManager() {
                   type="button"
                   onClick={async () => {
                     const toggle = !printer.enabled;
+                    if (toggle) {
+                      const conflict = printers.find(
+                        (p) => p.enabled && p.type === printer.type && p.id !== printer.id,
+                      );
+                      if (conflict) {
+                        toast.error("Un seul poste par type", {
+                          description: `Désactivez « ${conflict.name} » d'abord.`,
+                        });
+                        return;
+                      }
+                    }
                     await updatePrinter(printer.id, { enabled: toggle });
                     toast.success(`Imprimante ${toggle ? "activée" : "désactivée"}`);
                   }}

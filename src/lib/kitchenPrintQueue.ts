@@ -106,9 +106,15 @@ export type EnqueueReceiptResult =
 const STALE_PRINTING_MS = 2 * 60 * 1000;
 
 function enabledKitchenPrinters(printers: Printer[]): Printer[] {
-  return printers.filter(
-    (p) => p.enabled && (p.type === "plaque" || p.type === "four"),
-  );
+  const cuisine = printers.filter((p) => p.enabled && p.type === "cuisine");
+  // Strict 2-slot: at most one cuisine (prefer one with a MAC)
+  const withMac = cuisine.find((p) => (p.mac_address || "").trim() !== "");
+  if (withMac) return [withMac];
+  return cuisine.slice(0, 1);
+}
+
+function isCatchAllCuisine(printer: Printer): boolean {
+  return (printer.category_ids?.length ?? 0) === 0;
 }
 
 function lineCategoryId(item: CartItem): string | undefined {
@@ -134,6 +140,7 @@ export function findUnmappedDeltaLines(
   delta: CartItem[],
   kitchenPrinters: Printer[],
 ): CartItem[] {
+  if (kitchenPrinters.some(isCatchAllCuisine)) return [];
   const mappedIds = new Set<string>();
   for (const p of kitchenPrinters) {
     for (const id of p.category_ids ?? []) mappedIds.add(id);
@@ -150,11 +157,13 @@ export function buildStationBundles(
 ): KitchenStationBundle[] {
   const bundles: KitchenStationBundle[] = [];
   for (const printer of kitchenPrinters) {
-    const ids = new Set(printer.category_ids ?? []);
-    const lines = delta.filter((item) => {
-      const catId = lineCategoryId(item);
-      return !!catId && ids.has(catId);
-    });
+    const lines = isCatchAllCuisine(printer)
+      ? delta
+      : delta.filter((item) => {
+          const catId = lineCategoryId(item);
+          const ids = new Set(printer.category_ids ?? []);
+          return !!catId && ids.has(catId);
+        });
     if (lines.length > 0) {
       bundles.push({
         printerId: printer.id,
@@ -217,7 +226,7 @@ export async function enqueueKitchenStations(
   if (kitchenPrinters.length === 0) {
     return {
       status: "error",
-      message: "Aucune imprimante cuisine (plaque/four) activée.",
+      message: "Aucune imprimante cuisine activée.",
     };
   }
 

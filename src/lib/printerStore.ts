@@ -2,7 +2,14 @@ import { useEffect, useCallback } from "react";
 import { create } from "zustand";
 import { supabase } from "@/lib/supabase";
 
-export type PrinterType = "caisse" | "plaque" | "four";
+export type PrinterType = "caisse" | "cuisine";
+
+/** Map legacy plaque/four rows to cuisine until DB migration is applied. */
+export function normalizePrinterType(raw: unknown): PrinterType {
+  if (raw === "caisse") return "caisse";
+  if (raw === "cuisine" || raw === "plaque" || raw === "four") return "cuisine";
+  return "cuisine";
+}
 
 export type Printer = {
   id: string;
@@ -12,7 +19,7 @@ export type Printer = {
   enabled: boolean;
   /** @deprecated Legacy name-based routing — prefer category_ids */
   categories: string[];
-  /** UUID category ids used for kitchen routing */
+  /** UUID category ids used for kitchen routing; empty = catch-all cuisine */
   category_ids: string[];
 };
 
@@ -80,15 +87,20 @@ async function fetchPrintersFromDB(): Promise<Printer[]> {
   }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  return (data ?? []).map((row: any) => ({
-    id: row["id"] as string,
-    name: row["name"] as string,
-    type: row["type"] as PrinterType,
-    mac_address: (row["mac_address"] as string | null) ?? null,
-    enabled: (row["enabled"] as boolean) ?? true,
-    categories: parseNameCategories(row["categories"]),
-    category_ids: parseUuidArray(row["category_ids"]),
-  }));
+  return (data ?? []).map((row: any) => {
+    const rawType = row["type"];
+    const legacyStation = rawType === "plaque" || rawType === "four";
+    return {
+      id: row["id"] as string,
+      name: row["name"] as string,
+      type: normalizePrinterType(rawType),
+      mac_address: (row["mac_address"] as string | null) ?? null,
+      enabled: (row["enabled"] as boolean) ?? true,
+      categories: legacyStation ? [] : parseNameCategories(row["categories"]),
+      // Legacy plaque/four become catch-all cuisine until DB migration clears filters
+      category_ids: legacyStation ? [] : parseUuidArray(row["category_ids"]),
+    };
+  });
 }
 
 let _printerInitialized = false;

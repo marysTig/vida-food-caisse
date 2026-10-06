@@ -1,4 +1,4 @@
-/**
+﻿/**
  * PrintQueueDaemon — single-flight Bluetooth drain for kitchen + receipt.
  * Receipt priority; MAC cooldowns via bluetoothCoordinator; watchdog self-heal.
  */
@@ -182,16 +182,12 @@ async function tryAutoConsol(failedJob: PrintJob): Promise<void> {
   if (failedJob.payload.consolOfJobId) return; // already a consol copy
 
   const printers = getPrintersFromStore().filter(
-    (p) => p.enabled && (p.type === "plaque" || p.type === "four") && p.mac_address,
+    (p) => p.enabled && p.type === "cuisine" && p.mac_address,
   );
   const others = printers.filter((p) => p.id !== failedJob.printer_id);
   if (others.length === 0) return;
 
-  // Prefer the other of plaque/four relative to failed printer
-  const failedPrinter = printers.find((p) => p.id === failedJob.printer_id);
-  const preferred =
-    others.find((p) => failedPrinter && p.type !== failedPrinter.type) ??
-    others[0];
+  const preferred = others[0];
   if (!preferred) return;
 
   const result = await enqueueConsolKitchenJob({
