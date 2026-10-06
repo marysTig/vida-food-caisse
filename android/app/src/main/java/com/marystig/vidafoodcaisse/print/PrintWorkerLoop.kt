@@ -555,15 +555,24 @@ class PrintWorkerLoop(
       return
     }
 
+    // Peek before send: if another BT job is already local, release ACL after write.
+    val releaseForHandoff = !isReceipt && localQueue.hasBtWork()
     try {
-      val timing = btPrinter.sendEscPos(name, mac, b64, isReceipt)
+      val timing = btPrinter.sendEscPos(name, mac, b64, isReceipt, releaseForHandoff)
       ackQueue.offer(Ack.Done(job, System.currentTimeMillis()))
       wake()
+      // #region agent log
+      Log.i(
+        "PrinterLinkDebug",
+        """{"sessionId":"5eee2c","hypothesisId":"E","runId":"post-fix-handoff","location":"PrintWorkerLoop.processBluetoothJob","message":"bt-end","data":{"printer":"$name","gap":${timing.gapMs},"settle":${timing.settleMs},"connect":${timing.connectMs},"write":${timing.writeMs},"handoff":$releaseForHandoff,"queueDepth":${localQueue.depth()}},"timestamp":${System.currentTimeMillis()}}""",
+      )
+      // #endregion
       Log.i(
         TAG,
         "BT PRINT END OK · $name · reuse=${timing.reused} · " +
           "gap=${timing.gapMs} settle=${timing.settleMs} " +
-          "connect=${timing.connectMs} write=${timing.writeMs}",
+          "connect=${timing.connectMs} write=${timing.writeMs}" +
+          if (releaseForHandoff) " · handoff" else "",
       )
     } catch (e: Exception) {
       val msg = e.message ?: "Erreur impression"

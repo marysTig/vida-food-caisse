@@ -27,7 +27,7 @@ export const MAX_PRINT_ATTEMPTS = 3;
 export const RETRY_BACKOFF_MS = 2500;
 export const RECEIPT_RETRY_BACKOFF_MS = 450;
 /** 2-kitchen BT profile — MAC handoff gap (native EscPosBluetoothPrinter). */
-export const INTER_PRINTER_GAP_MS = 400;
+export const INTER_PRINTER_GAP_MS = 100;
 /** Short cool-down when caisse switches MAC (not the full kitchen gap). */
 export const RECEIPT_MAC_COOLDOWN_MS = 350;
 
@@ -282,6 +282,30 @@ export async function enqueueKitchenStations(
   const jobIds: string[] = [];
   let skippedNoMac = 0;
 
+  type StationRow = {
+    printerName: string;
+    idempotencyKey: string;
+    payload: PrintJobPayload;
+    row: {
+      table_id: string;
+      job_type: "kitchen";
+      priority: number;
+      printer_id: string;
+      printer_name: string;
+      transport: "bluetooth";
+      mac_address: string;
+      usb_vendor_id: null;
+      usb_product_id: null;
+      idempotency_key: string;
+      status: "pending";
+      attempt_count: number;
+      next_attempt_at: string;
+      payload: PrintJobPayload;
+      updated_at: string;
+    };
+  };
+
+  const pendingRows: StationRow[] = [];
   for (const station of stations) {
     const printer = kitchenPrinters.find((p) => p.id === station.printerId);
     const mac = (printer?.mac_address ?? "").trim();
@@ -315,37 +339,76 @@ export async function enqueueKitchenStations(
     if (orderNote) payload.orderNote = orderNote;
     if (globalSupplements.length > 0) payload.globalSupplements = globalSupplements;
 
-    const row = {
-      table_id: params.tableId,
-      job_type: "kitchen" as const,
-      priority: PRIORITY_KITCHEN,
-      printer_id: printer.id,
-      printer_name: printer.name,
-      transport: "bluetooth" as const,
-      mac_address: mac,
-      usb_vendor_id: null,
-      usb_product_id: null,
-      idempotency_key: idempotencyKey,
-      status: "pending" as const,
-      attempt_count: 0,
-      next_attempt_at: now,
+    pendingRows.push({
+      printerName: printer.name,
+      idempotencyKey,
       payload,
-      updated_at: now,
-    };
+      row: {
+        table_id: params.tableId,
+        job_type: "kitchen" as const,
+        priority: PRIORITY_KITCHEN,
+        printer_id: printer.id,
+        printer_name: printer.name,
+        transport: "bluetooth" as const,
+        mac_address: mac,
+        usb_vendor_id: null,
+        usb_product_id: null,
+        idempotency_key: idempotencyKey,
+        status: "pending" as const,
+        attempt_count: 0,
+        next_attempt_at: now,
+        payload,
+        updated_at: now,
+      },
+    });
+  }
 
-    console.log("[KITCHEN ENQUEUE] insert", printer.name);
-    const { data, error } = await supabase
-      .from("print_jobs")
-      .insert(row)
-      .select("id")
-      .maybeSingle();
+  // Insert all station jobs in parallel so claimBatch can take both at once
+  // (sequential insert let the first printer start before the second row existed).
+  console.log(
+    "[KITCHEN ENQUEUE] insert parallel",
+    pendingRows.map((r) => r.printerName),
+  );
+  // #region agent log
+  fetch("http://127.0.0.1:7680/ingest/b490126b-dfa2-4a19-9733-3902cacf3768", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "X-Debug-Session-Id": "5eee2c",
+    },
+    body: JSON.stringify({
+      sessionId: "5eee2c",
+      hypothesisId: "F",
+      runId: "post-fix-handoff",
+      location: "kitchenPrintQueue.ts:enqueue",
+      message: "parallel-insert",
+      data: {
+        printers: pendingRows.map((r) => r.printerName),
+        n: pendingRows.length,
+      },
+      timestamp: Date.now(),
+    }),
+  }).catch(() => {});
+  // #endregion
 
+  const insertResults = await Promise.all(
+    pendingRows.map(async (entry) => {
+      const { data, error } = await supabase
+        .from("print_jobs")
+        .insert(entry.row)
+        .select("id")
+        .maybeSingle();
+      return { entry, data, error };
+    }),
+  );
+
+  for (const { entry, data, error } of insertResults) {
     if (error) {
       if (error.code === "23505") {
         const { data: existing } = await supabase
           .from("print_jobs")
           .select("id, status")
-          .eq("idempotency_key", idempotencyKey)
+          .eq("idempotency_key", entry.idempotencyKey)
           .maybeSingle();
 
         if (
@@ -358,7 +421,7 @@ export async function enqueueKitchenStations(
               status: "pending",
               attempt_count: 0,
               next_attempt_at: now,
-              payload,
+              payload: entry.payload,
               claimed_by_device_id: null,
               error: null,
               updated_at: now,

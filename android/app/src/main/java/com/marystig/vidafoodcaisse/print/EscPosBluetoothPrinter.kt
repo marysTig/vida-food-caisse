@@ -33,12 +33,18 @@ class EscPosBluetoothPrinter(
     const val PROBE_ATTEMPT_MS = 2_500L
     /** After CHANNEL1 timeout the ACL is dirty — needs longer than 450ms (Logcat read ret -1). */
     const val INTER_MODE_SETTLE_MS = 900L
-    /** Kitchen↔kitchen MAC handoff — kept short now that SPP-first is stable. */
-    const val MAC_SWITCH_SETTLE_MS = 250L
+    /**
+     * Kitchen↔kitchen MAC handoff settle. Logcat 21:20 Four: settle=0 still
+     * connected in 1267ms after gap alone — skip artificial settle when radio clean.
+     */
+    const val MAC_SWITCH_SETTLE_MS = 0L
     const val HARD_SETTLE_MS = 700L
     const val PRE_DISCONNECT_DRAIN_MS = 100L
-    /** Inter-kitchen gap on one radio (was 900 — dominant delay after SPP fix). */
-    const val INTER_PRINTER_GAP_MS = 400L
+    /**
+     * Inter-kitchen gap on one radio. Was 400; second ticket waited gap+connect
+     * (~1.7s) after first. Keep a tiny ACL tear-down window only.
+     */
+    const val INTER_PRINTER_GAP_MS = 100L
     const val RECEIPT_MAC_COOLDOWN_MS = 200L
     const val KEEPALIVE_MS = 20_000L
   }
@@ -128,6 +134,8 @@ class EscPosBluetoothPrinter(
     macAddress: String,
     dataBase64: String,
     isReceipt: Boolean,
+    /** True when another BT kitchen job is already queued — release ACL ASAP. */
+    releaseForHandoff: Boolean = false,
   ): SendTiming {
     val mac = normalizeMac(macAddress)
     if (mac.isBlank()) throw IOException("Adresse MAC manquante")
@@ -174,13 +182,10 @@ class EscPosBluetoothPrinter(
         val tSettle = System.currentTimeMillis()
         hardSettle("pre-connect:$printerName")
         settleMs = System.currentTimeMillis() - tSettle
-      } else if (switchingMac) {
-        // Keep-alive close leaves ACL dirty — Logcat: Caisse CHANNEL1 6s fail after Cuisin.
+      } else if (switchingMac && MAC_SWITCH_SETTLE_MS > 0L) {
         Log.i(TAG, "MAC switch settle ${MAC_SWITCH_SETTLE_MS}ms · $printerName")
         Thread.sleep(MAC_SWITCH_SETTLE_MS)
         settleMs = MAC_SWITCH_SETTLE_MS
-      } else if (lastSuccessMac != null && normalizeMac(lastSuccessMac!!) != mac) {
-        Thread.sleep(100)
       }
 
       val device: BluetoothDevice = try {
@@ -206,7 +211,8 @@ class EscPosBluetoothPrinter(
       val out = socket.outputStream
       out.write(raw)
       out.flush()
-      if (!isReceipt) {
+      // Skip drain when handing off — next MAC connect needs the radio free now.
+      if (!isReceipt && !releaseForHandoff) {
         Thread.sleep(PRE_DISCONNECT_DRAIN_MS)
       }
     } catch (e: Exception) {
@@ -222,10 +228,25 @@ class EscPosBluetoothPrinter(
     liveOpenedAt = System.currentTimeMillis()
     radioNeedsSettle = false
     PrinterLinkStatusHub.onBtSuccess(mac)
+
+    // Drop keepalive early so ACL tear-down overlaps the next job's gap/connect.
+    if (releaseForHandoff && !isReceipt) {
+      Log.i(TAG, "handoff release · $printerName · $mac")
+      closeLiveSocket()
+      radioNeedsSettle = false
+    }
+
+    // #region agent log
+    Log.i(
+      "PrinterLinkDebug",
+      """{"sessionId":"5eee2c","hypothesisId":"E","runId":"post-fix-handoff","location":"EscPosBt.sendEscPos","message":"send-complete","data":{"printer":"$printerName","gapMs":$gapMs,"settleMs":$settleMs,"connectMs":$connectMs,"writeMs":$writeMs,"reused":$reused,"releaseForHandoff":$releaseForHandoff},"timestamp":${System.currentTimeMillis()}}""",
+    )
+    // #endregion
     Log.i(
       TAG,
       "SEND COMPLETE · $printerName · bytes=${raw.size} · reuse=$reused · " +
-        "gap_ms=$gapMs settle_ms=$settleMs connect_ms=$connectMs write_ms=$writeMs",
+        "gap_ms=$gapMs settle_ms=$settleMs connect_ms=$connectMs write_ms=$writeMs" +
+        if (releaseForHandoff) " · handoff" else "",
     )
     return SendTiming(gapMs, settleMs, connectMs, writeMs, reused)
   }
