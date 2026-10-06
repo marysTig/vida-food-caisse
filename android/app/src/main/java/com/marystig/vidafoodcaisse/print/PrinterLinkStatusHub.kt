@@ -22,8 +22,11 @@ object PrinterLinkStatusHub {
   /** MACs with an active ACL (from system broadcasts). */
   private val aclConnectedMacs = CopyOnWriteArraySet<String>()
 
-  /** MACs that successfully printed/probed this process. */
-  private val okBtMacs = CopyOnWriteArraySet<String>()
+  /** MACs that successfully printed/probed this process (with timestamp). */
+  private val okBtMacAt = java.util.concurrent.ConcurrentHashMap<String, Long>()
+
+  /** Grace window after a successful BT job before requiring live/ACL again. */
+  private const val BT_OK_TTL_MS = 45_000L
 
   /** Last known live BT keep-alive MAC from EscPosBluetoothPrinter. */
   @Volatile var liveBtMac: String? = null
@@ -67,31 +70,22 @@ object PrinterLinkStatusHub {
   fun onBtAclConnected(mac: String) {
     aclConnectedMacs.add(normalizeMac(mac))
     Log.i(TAG, "bt acl connected $mac")
-    // #region agent log
-    Log.i(
-      "PrinterLinkDebug",
-      """{"sessionId":"5eee2c","hypothesisId":"C","location":"PrinterLinkStatusHub.kt:acl","message":"acl-connected","data":{"mac":"${normalizeMac(mac)}"},"timestamp":${System.currentTimeMillis()}}""",
-    )
-    // #endregion
     notifyChanged()
   }
 
   fun onBtAclDisconnected(mac: String) {
-    aclConnectedMacs.remove(normalizeMac(mac))
+    val n = normalizeMac(mac)
+    aclConnectedMacs.remove(n)
+    // Power-off / link drop: clear verified-ok so LED cannot stay green on bond alone.
+    okBtMacAt.remove(n)
     Log.i(TAG, "bt acl disconnected $mac")
-    // #region agent log
-    Log.i(
-      "PrinterLinkDebug",
-      """{"sessionId":"5eee2c","hypothesisId":"C","location":"PrinterLinkStatusHub.kt:acl","message":"acl-disconnected","data":{"mac":"${normalizeMac(mac)}"},"timestamp":${System.currentTimeMillis()}}""",
-    )
-    // #endregion
     notifyChanged()
   }
 
   fun onBtSessionOpened(mac: String) {
     val n = normalizeMac(mac)
     liveBtMac = n
-    okBtMacs.add(n)
+    okBtMacAt[n] = System.currentTimeMillis()
     notifyChanged()
   }
 
@@ -104,13 +98,17 @@ object PrinterLinkStatusHub {
   }
 
   fun onBtSuccess(mac: String) {
-    okBtMacs.add(normalizeMac(mac))
+    okBtMacAt[normalizeMac(mac)] = System.currentTimeMillis()
     notifyChanged()
   }
 
   fun isAclConnected(mac: String): Boolean =
     aclConnectedMacs.contains(normalizeMac(mac))
 
+  private fun isRecentBtOk(mac: String): Boolean {
+    val at = okBtMacAt[mac] ?: return false
+    return System.currentTimeMillis() - at < BT_OK_TTL_MS
+  }
   @SuppressLint("MissingPermission")
   fun buildStatusArray(
     context: Context,
@@ -187,19 +185,14 @@ object PrinterLinkStatusHub {
           } == true
           val live = liveBtMac == mac
           val acl = isAclConnected(mac)
-          val lastOk = okBtMacs.contains(mac)
-          // Bonded = hardware ready for kitchen use (RFCOMM is on-demand).
-          // Pending only when not bonded yet / adapter issues handled above.
+          val lastOk = isRecentBtOk(mac)
+          // Bond alone is NOT online — Android keeps BOND_BONDED when printer is off.
+          // Ready only with live RFCOMM, ACL link, or a short post-success TTL.
           val state = when {
             !bonded -> "disconnected"
-            else -> "ready"
+            live || acl || lastOk -> "ready"
+            else -> "disconnected"
           }
-          // #region agent log
-          Log.i(
-            "PrinterLinkDebug",
-            """{"sessionId":"5eee2c","hypothesisId":"A","location":"PrinterLinkStatusHub.kt:bt","message":"bt-link-facts","data":{"id":"$id","name":"$name","mac":"$mac","bonded":$bonded,"live":$live,"acl":$acl,"lastOk":$lastOk,"state":"$state"},"timestamp":${System.currentTimeMillis()}}""",
-          )
-          // #endregion
           o.put("state", state)
           o.put("bonded", bonded)
           o.put("live", live)
@@ -211,7 +204,7 @@ object PrinterLinkStatusHub {
               !bonded -> "BT non appairée"
               live || acl -> "BT connectée"
               lastOk -> "BT prête"
-              else -> "BT appairée"
+              else -> "BT hors ligne"
             },
           )
         }

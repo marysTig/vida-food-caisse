@@ -201,36 +201,6 @@ async function refreshFromNative(): Promise<void> {
     const nativeById: Record<string, NativePrinterLinkStatus> = {};
     for (const n of nativeList) nativeById[n.id] = n;
 
-    // #region agent log
-    const btDebug = nativeList
-      .filter((n) => n.transport !== "usb")
-      .map((n) => ({
-        id: n.id,
-        name: n.name,
-        state: n.state,
-        bonded: n.bonded,
-        live: n.live,
-        aclConnected: n.aclConnected,
-        detail: n.detail,
-      }));
-    fetch("http://127.0.0.1:7680/ingest/b490126b-dfa2-4a19-9733-3902cacf3768", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "X-Debug-Session-Id": "5eee2c",
-      },
-      body: JSON.stringify({
-        sessionId: "5eee2c",
-        hypothesisId: "A,B,C,D",
-        location: "printerLinkStatus.ts:refreshFromNative",
-        message: "native-bt-status",
-        data: { count: nativeList.length, btDebug, slotsPreview: null },
-        timestamp: Date.now(),
-      }),
-    }).catch(() => {});
-    console.warn("[PrinterLinkDebug]", JSON.stringify({ btDebug }));
-    // #endregion
-
     // If native returned nothing, keep previous tones but don't stay forever on
     // "Statut…" — mark as error so the cashier can tap reconnect.
     if (nativeList.length === 0) {
@@ -247,35 +217,9 @@ async function refreshFromNative(): Promise<void> {
     }
 
     const reconnectingId = usePrinterLinkState.getState().reconnectingId;
-    const nextSlots = buildSlots(printers, nativeById, reconnectingId);
-    // #region agent log
-    fetch("http://127.0.0.1:7680/ingest/b490126b-dfa2-4a19-9733-3902cacf3768", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "X-Debug-Session-Id": "5eee2c",
-      },
-      body: JSON.stringify({
-        sessionId: "5eee2c",
-        hypothesisId: "D",
-        location: "printerLinkStatus.ts:buildSlots",
-        message: "led-tones",
-        data: {
-          slots: nextSlots.map((s) => ({
-            key: s.key,
-            label: s.label,
-            tone: s.tone,
-            detail: s.detail,
-            nativeState: s.printer ? nativeById[s.printer.id]?.state : null,
-          })),
-        },
-        timestamp: Date.now(),
-      }),
-    }).catch(() => {});
-    // #endregion
     usePrinterLinkState.setState({
       lastNative: nativeById,
-      slots: nextSlots,
+      slots: buildSlots(printers, nativeById, reconnectingId),
     });
   } finally {
     refreshInFlight = false;
