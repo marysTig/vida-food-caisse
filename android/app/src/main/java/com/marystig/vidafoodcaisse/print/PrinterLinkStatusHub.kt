@@ -2,12 +2,12 @@ package com.marystig.vidafoodcaisse.print
 
 import android.annotation.SuppressLint
 import android.bluetooth.BluetoothAdapter
-import android.bluetooth.BluetoothDevice
 import android.content.Context
 import android.hardware.usb.UsbManager
 import android.util.Log
 import com.getcapacitor.JSArray
 import com.getcapacitor.JSObject
+import org.json.JSONObject
 import java.util.concurrent.CopyOnWriteArraySet
 
 /**
@@ -22,12 +22,11 @@ object PrinterLinkStatusHub {
   /** MACs with an active ACL (from system broadcasts). */
   private val aclConnectedMacs = CopyOnWriteArraySet<String>()
 
+  /** MACs that successfully printed/probed this process. */
+  private val okBtMacs = CopyOnWriteArraySet<String>()
+
   /** Last known live BT keep-alive MAC from EscPosBluetoothPrinter. */
   @Volatile var liveBtMac: String? = null
-    private set
-
-  /** Last successful BT print/probe MAC. */
-  @Volatile var lastOkBtMac: String? = null
     private set
 
   /** Live USB session VID/PID (null if none). */
@@ -78,8 +77,9 @@ object PrinterLinkStatusHub {
   }
 
   fun onBtSessionOpened(mac: String) {
-    liveBtMac = normalizeMac(mac)
-    lastOkBtMac = liveBtMac
+    val n = normalizeMac(mac)
+    liveBtMac = n
+    okBtMacs.add(n)
     notifyChanged()
   }
 
@@ -92,7 +92,7 @@ object PrinterLinkStatusHub {
   }
 
   fun onBtSuccess(mac: String) {
-    lastOkBtMac = normalizeMac(mac)
+    okBtMacs.add(normalizeMac(mac))
     notifyChanged()
   }
 
@@ -107,10 +107,18 @@ object PrinterLinkStatusHub {
     val usbManager = context.getSystemService(Context.USB_SERVICE) as UsbManager
     val adapter = BluetoothAdapter.getDefaultAdapter()
     val out = JSArray()
-    if (printers == null) return out
+    if (printers == null) {
+      Log.w(TAG, "buildStatusArray: printers null")
+      return out
+    }
 
+    Log.i(TAG, "buildStatusArray count=${printers.length()}")
     for (i in 0 until printers.length()) {
-      val raw = printers.opt(i) as? JSObject ?: continue
+      val raw = coerceToJSObject(printers.opt(i))
+      if (raw == null) {
+        Log.w(TAG, "skip printer[$i] type=${printers.opt(i)?.javaClass?.name}")
+        continue
+      }
       val id = raw.getString("id") ?: continue
       val transport = raw.getString("transport")?.lowercase() ?: "bluetooth"
       val name = raw.getString("name") ?: "imprimante"
@@ -135,8 +143,7 @@ object PrinterLinkStatusHub {
           val state = when {
             !present -> "disconnected"
             !permission -> "no_permission"
-            live || permission -> "ready"
-            else -> "pending"
+            else -> "ready"
           }
           o.put("state", state)
           o.put("present", present)
@@ -145,10 +152,9 @@ object PrinterLinkStatusHub {
           o.put(
             "detail",
             when (state) {
-              "ready" -> "USB connectée"
+              "ready" -> if (live) "USB connectée" else "USB branchée"
               "no_permission" -> "Permission USB requise"
-              "disconnected" -> "USB débranchée"
-              else -> "USB…"
+              else -> "USB débranchée"
             },
           )
         }
@@ -169,29 +175,53 @@ object PrinterLinkStatusHub {
           } == true
           val live = liveBtMac == mac
           val acl = isAclConnected(mac)
-          val lastOk = lastOkBtMac == mac
+          val lastOk = okBtMacs.contains(mac)
+          // Bonded = hardware ready for kitchen use (RFCOMM is on-demand).
+          // Pending only when not bonded yet / adapter issues handled above.
           val state = when {
             !bonded -> "disconnected"
-            live || acl || lastOk -> "ready"
-            else -> "pending"
+            else -> "ready"
           }
           o.put("state", state)
           o.put("bonded", bonded)
           o.put("live", live)
           o.put("aclConnected", acl)
+          o.put("verified", lastOk)
           o.put(
             "detail",
-            when (state) {
-              "ready" -> if (live || acl) "BT connectée" else "BT appairée"
-              "pending" -> "BT appairée — vérification…"
-              else -> "BT non appairée"
+            when {
+              !bonded -> "BT non appairée"
+              live || acl -> "BT connectée"
+              lastOk -> "BT prête"
+              else -> "BT appairée"
             },
           )
         }
       }
       out.put(o)
     }
+    Log.i(TAG, "buildStatusArray out=${out.length()}")
     return out
+  }
+
+  private fun coerceToJSObject(raw: Any?): JSObject? {
+    return when (raw) {
+      null -> null
+      is JSObject -> raw
+      is JSONObject -> JSObject.fromJSONObject(raw)
+      is Map<*, *> -> {
+        val o = JSObject()
+        for ((k, v) in raw) {
+          if (k is String && v != null) o.put(k, v)
+        }
+        o
+      }
+      else -> try {
+        JSObject(raw.toString())
+      } catch (_: Exception) {
+        null
+      }
+    }
   }
 
   private fun intOrNull(obj: JSObject, key: String): Int? {

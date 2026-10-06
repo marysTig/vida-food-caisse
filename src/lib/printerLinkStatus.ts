@@ -190,9 +190,32 @@ async function refreshFromNative(): Promise<void> {
     const printers = getPrintersFromStore();
     const { caisse, cuisine } = pickPosPrinters(printers);
     const targets = [caisse, ...cuisine].filter(Boolean) as Printer[];
+    if (targets.length === 0) {
+      usePrinterLinkState.setState({
+        lastNative: {},
+        slots: buildSlots(printers, {}, usePrinterLinkState.getState().reconnectingId),
+      });
+      return;
+    }
     const nativeList = await nativeGetPrinterLinkStatus(targets.map(toQuery));
     const nativeById: Record<string, NativePrinterLinkStatus> = {};
     for (const n of nativeList) nativeById[n.id] = n;
+
+    // If native returned nothing, keep previous tones but don't stay forever on
+    // "Statut…" — mark as error so the cashier can tap reconnect.
+    if (nativeList.length === 0) {
+      console.warn("[PrinterLink] native status empty", { asked: targets.length });
+      for (const t of targets) {
+        nativeById[t.id] = {
+          id: t.id,
+          name: t.name,
+          transport: resolvePrinterTransport(t),
+          state: "disconnected",
+          detail: "Statut natif indisponible",
+        };
+      }
+    }
+
     const reconnectingId = usePrinterLinkState.getState().reconnectingId;
     usePrinterLinkState.setState({
       lastNative: nativeById,
