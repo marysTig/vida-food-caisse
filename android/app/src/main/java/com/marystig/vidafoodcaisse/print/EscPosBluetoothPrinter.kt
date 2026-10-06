@@ -8,11 +8,13 @@ import android.util.Base64
 import android.util.Log
 import java.io.IOException
 import java.util.UUID
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicReference
 
 /**
  * Classic SPP (RFCOMM) ESC/POS sender with same-MAC session keep-alive.
- * At most one live socket (single radio). Tuned for 2-printer hubs.
+ * Prefers last-known connect mode per MAC; caps SPP attempts so a dead UUID
+ * path cannot burn 15s on the radio thread (Logcat 17:50 evidence).
  */
 class EscPosBluetoothPrinter {
   companion object {
@@ -20,15 +22,19 @@ class EscPosBluetoothPrinter {
     private val SPP_UUID: UUID =
       UUID.fromString("00001101-0000-1000-8000-00805F9B34FB")
 
-    /** 2-printer profile — keep in sync with JS bluetoothRadio / kitchenPrintQueue. */
     const val OP_TIMEOUT_MS = 15_000L
+    /** Fast-fail SPP UUID — Logcat showed 15s stalls before channel-1. */
+    const val SPP_ATTEMPT_MS = 2_500L
+    const val CHANNEL1_ATTEMPT_MS = 6_000L
+    const val PROBE_ATTEMPT_MS = 2_500L
     const val HARD_SETTLE_MS = 700L
     const val PRE_DISCONNECT_DRAIN_MS = 175L
     const val INTER_PRINTER_GAP_MS = 700L
     const val RECEIPT_MAC_COOLDOWN_MS = 350L
-    /** Keep RFCOMM open for same-MAC burst reuse. */
     const val KEEPALIVE_MS = 20_000L
   }
+
+  private enum class ConnectMode { CHANNEL1, SPP }
 
   data class SendTiming(
     val gapMs: Long,
@@ -39,6 +45,7 @@ class EscPosBluetoothPrinter {
   )
 
   private val socketRef = AtomicReference<BluetoothSocket?>(null)
+  private val preferredMode = ConcurrentHashMap<String, ConnectMode>()
   @Volatile private var liveMac: String? = null
   @Volatile private var lastSuccessMac: String? = null
   @Volatile private var liveOpenedAt = 0L
@@ -63,14 +70,12 @@ class EscPosBluetoothPrinter {
     radioNeedsSettle = false
   }
 
-  /** Close keep-alive session if idle past KEEPALIVE_MS. */
   fun closeIfKeepaliveExpired() {
     val mac = liveMac ?: return
     val age = System.currentTimeMillis() - liveOpenedAt
     if (age >= KEEPALIVE_MS) {
       Log.i(TAG, "keepalive expired · $mac · ${age}ms")
       closeLiveSocket()
-      // Clean idle close — do not force settle on next same-MAC connect.
       radioNeedsSettle = false
     }
   }
@@ -98,9 +103,6 @@ class EscPosBluetoothPrinter {
     return gap
   }
 
-  /**
-   * Write ESC/POS bytes. Reuses live socket when same MAC within keepalive.
-   */
   @SuppressLint("MissingPermission")
   fun sendEscPos(
     printerName: String,
@@ -159,7 +161,7 @@ class EscPosBluetoothPrinter {
 
       Log.i(TAG, "CONNECT START · $printerName · $mac")
       val tConnect = System.currentTimeMillis()
-      socket = connectEscPos(device, printerName)
+      socket = connectEscPos(device, printerName, mac, probe = false)
       connectMs = System.currentTimeMillis() - tConnect
       socketRef.set(socket)
       liveMac = mac
@@ -196,7 +198,7 @@ class EscPosBluetoothPrinter {
     return SendTiming(gapMs, settleMs, connectMs, writeMs, reused)
   }
 
-  /** Reachability probe — one settle, closes session afterward. */
+  /** Reachability probe — short timeouts; does not burn 15s SPP. */
   @SuppressLint("MissingPermission")
   fun probeConnect(printerName: String, macAddress: String) {
     val mac = normalizeMac(macAddress)
@@ -208,7 +210,7 @@ class EscPosBluetoothPrinter {
     applyMacCooldown(mac, isReceipt = false)
     hardSettle("probe:$printerName")
     val device = resolveBondedDevice(adapter, mac)
-    val socket = connectEscPos(device, printerName)
+    val socket = connectEscPos(device, printerName, mac, probe = true)
     socketRef.set(socket)
     liveMac = mac
     try {
@@ -216,7 +218,6 @@ class EscPosBluetoothPrinter {
       radioNeedsSettle = false
     } finally {
       closeLiveSocket()
-      // Leave dirty so next production connect settles once if needed soon after.
       radioNeedsSettle = true
     }
   }
@@ -227,9 +228,17 @@ class EscPosBluetoothPrinter {
     return bonded ?: adapter.getRemoteDevice(mac)
   }
 
-  /** Insecure SPP UUID then insecure channel-1 — same as cordova bluetooth-serial. */
+  /**
+   * Prefer last successful mode per MAC; default CHANNEL1 (Logcat: SPP often 15s-fails first).
+   * Short SPP timeout; never stack two full OP_TIMEOUT waits.
+   */
   @SuppressLint("MissingPermission")
-  private fun connectEscPos(device: BluetoothDevice, printerName: String): BluetoothSocket {
+  private fun connectEscPos(
+    device: BluetoothDevice,
+    printerName: String,
+    mac: String,
+    probe: Boolean,
+  ): BluetoothSocket {
     val adapter = BluetoothAdapter.getDefaultAdapter()
     try {
       adapter?.cancelDiscovery()
@@ -237,49 +246,58 @@ class EscPosBluetoothPrinter {
       /* ignore */
     }
 
-    val primary =
-      try {
-        device.createInsecureRfcommSocketToServiceRecord(SPP_UUID)
-      } catch (_: Exception) {
-        device.createRfcommSocketToServiceRecord(SPP_UUID)
-      }
-    socketRef.set(primary)
+    val sppMs = if (probe) PROBE_ATTEMPT_MS else SPP_ATTEMPT_MS
+    val ch1Ms = if (probe) PROBE_ATTEMPT_MS else CHANNEL1_ATTEMPT_MS
+    val first = preferredMode[mac] ?: ConnectMode.CHANNEL1
+    val second = if (first == ConnectMode.CHANNEL1) ConnectMode.SPP else ConnectMode.CHANNEL1
+
     try {
-      connectWithTimeout(primary, OP_TIMEOUT_MS)
-      return primary
-    } catch (first: IOException) {
-      Log.w(TAG, "SPP UUID failed · $printerName — trying channel 1", first)
-      try {
-        primary.close()
-      } catch (_: Exception) {
-        /* ignore */
-      }
-      socketRef.compareAndSet(primary, null)
+      val s = openMode(device, first, if (first == ConnectMode.SPP) sppMs else ch1Ms)
+      preferredMode[mac] = first
+      Log.i(TAG, "CONNECTED ${first.name} · $printerName")
+      return s
+    } catch (firstErr: IOException) {
+      Log.w(TAG, "${first.name} failed · $printerName — trying ${second.name}", firstErr)
     }
 
-    val fallback =
-      try {
-        device.javaClass
-          .getMethod("createInsecureRfcommSocket", Int::class.javaPrimitiveType)
-          .invoke(device, 1) as BluetoothSocket
-      } catch (_: Exception) {
-        device.javaClass
-          .getMethod("createRfcommSocket", Int::class.javaPrimitiveType)
-          .invoke(device, 1) as BluetoothSocket
-      }
-    socketRef.set(fallback)
+    val s = openMode(device, second, if (second == ConnectMode.SPP) sppMs else ch1Ms)
+    preferredMode[mac] = second
+    Log.i(TAG, "CONNECTED ${second.name} · $printerName")
+    return s
+  }
+
+  @SuppressLint("MissingPermission")
+  private fun openMode(device: BluetoothDevice, mode: ConnectMode, timeoutMs: Long): BluetoothSocket {
+    val socket = when (mode) {
+      ConnectMode.SPP ->
+        try {
+          device.createInsecureRfcommSocketToServiceRecord(SPP_UUID)
+        } catch (_: Exception) {
+          device.createRfcommSocketToServiceRecord(SPP_UUID)
+        }
+      ConnectMode.CHANNEL1 ->
+        try {
+          device.javaClass
+            .getMethod("createInsecureRfcommSocket", Int::class.javaPrimitiveType)
+            .invoke(device, 1) as BluetoothSocket
+        } catch (_: Exception) {
+          device.javaClass
+            .getMethod("createRfcommSocket", Int::class.javaPrimitiveType)
+            .invoke(device, 1) as BluetoothSocket
+        }
+    }
+    socketRef.set(socket)
     try {
-      connectWithTimeout(fallback, OP_TIMEOUT_MS)
-      Log.i(TAG, "CONNECTED channel1 · $printerName")
-      return fallback
-    } catch (second: IOException) {
+      connectWithTimeout(socket, timeoutMs)
+      return socket
+    } catch (e: IOException) {
       try {
-        fallback.close()
+        socket.close()
       } catch (_: Exception) {
         /* ignore */
       }
-      socketRef.compareAndSet(fallback, null)
-      throw second
+      socketRef.compareAndSet(socket, null)
+      throw e
     }
   }
 

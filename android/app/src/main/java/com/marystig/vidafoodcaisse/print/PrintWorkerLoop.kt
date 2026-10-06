@@ -133,7 +133,7 @@ class PrintWorkerLoop(
     }
   }
 
-  /** Run Admin probe on the radio thread. */
+  /** Run Admin probe on the radio thread — never while production work is queued. */
   fun adminProbe(printerName: String, mac: String): Pair<Boolean, String> {
     return runOnRadioBlocking {
       try {
@@ -208,6 +208,7 @@ class PrintWorkerLoop(
 
   private fun netLoop() {
     var lastStaleCheck = 0L
+    var lastClaimAttemptMs = 0L
     while (running.get()) {
       try {
         drainAcks()
@@ -221,8 +222,12 @@ class PrintWorkerLoop(
           }
         }
 
-        val needClaim = localQueue.isEmpty() || wake.compareAndSet(true, false)
-        if (needClaim || localQueue.depth() < 3) {
+        // Claim only on wake OR idle interval when empty — never every tick (Logcat storm).
+        val woke = wake.compareAndSet(true, false)
+        val idleDue =
+          localQueue.isEmpty() && (now - lastClaimAttemptMs >= POLL_IDLE_MS)
+        if (woke || idleDue) {
+          lastClaimAttemptMs = now
           val t0 = System.currentTimeMillis()
           val batch = try {
             repo.claimBatch()
@@ -243,7 +248,7 @@ class PrintWorkerLoop(
         }
 
         onStatus(true, localQueue.depth(), lastError.get())
-        sleepInterruptible(if (localQueue.isEmpty()) POLL_IDLE_MS else 80L)
+        sleepInterruptible(if (localQueue.isEmpty()) POLL_IDLE_MS else 50L)
       } catch (e: InterruptedException) {
         Thread.currentThread().interrupt()
         break
@@ -316,12 +321,17 @@ class PrintWorkerLoop(
   private fun radioLoop() {
     while (running.get()) {
       try {
-        drainAdminOps()
+        // Production first: do not run admin probe while jobs are waiting (Logcat 17:47).
+        if (localQueue.isEmpty()) {
+          drainAdminOps()
+        }
         printer.closeIfKeepaliveExpired()
 
         // Prefer receipts already in local queue (preempt kitchen start)
         var job = localQueue.take()
         if (job == null) {
+          // Idle — drain deferred admin ops
+          drainAdminOps()
           onStatus(true, 0, lastError.get())
           sleepInterruptible(POLL_IDLE_MS)
           continue
