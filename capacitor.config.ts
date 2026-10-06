@@ -5,11 +5,11 @@ const config: CapacitorConfig = {
   appName: 'vida-food-caisse',
   webDir: '.output/public',
   server: {
-    // Production alias for this Vercel project (vida-food-caisse.vercel.app is owned elsewhere)
-    url: 'https://vida-food-caisse-livid.vercel.app/',
+    // Tablet WebView must match the production admin host with 2-slot UI
+    url: 'https://vida-food-caisse.vercel.app/',
     allowNavigation: [
-      'vida-food-caisse-livid.vercel.app',
       'vida-food-caisse.vercel.app',
+      'vida-food-caisse-livid.vercel.app',
       '*.vercel.app',
     ],
   }
