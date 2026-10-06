@@ -67,12 +67,24 @@ object PrinterLinkStatusHub {
   fun onBtAclConnected(mac: String) {
     aclConnectedMacs.add(normalizeMac(mac))
     Log.i(TAG, "bt acl connected $mac")
+    // #region agent log
+    Log.i(
+      "PrinterLinkDebug",
+      """{"sessionId":"5eee2c","hypothesisId":"C","location":"PrinterLinkStatusHub.kt:acl","message":"acl-connected","data":{"mac":"${normalizeMac(mac)}"},"timestamp":${System.currentTimeMillis()}}""",
+    )
+    // #endregion
     notifyChanged()
   }
 
   fun onBtAclDisconnected(mac: String) {
     aclConnectedMacs.remove(normalizeMac(mac))
     Log.i(TAG, "bt acl disconnected $mac")
+    // #region agent log
+    Log.i(
+      "PrinterLinkDebug",
+      """{"sessionId":"5eee2c","hypothesisId":"C","location":"PrinterLinkStatusHub.kt:acl","message":"acl-disconnected","data":{"mac":"${normalizeMac(mac)}"},"timestamp":${System.currentTimeMillis()}}""",
+    )
+    // #endregion
     notifyChanged()
   }
 
@@ -182,6 +194,12 @@ object PrinterLinkStatusHub {
             !bonded -> "disconnected"
             else -> "ready"
           }
+          // #region agent log
+          Log.i(
+            "PrinterLinkDebug",
+            """{"sessionId":"5eee2c","hypothesisId":"A","location":"PrinterLinkStatusHub.kt:bt","message":"bt-link-facts","data":{"id":"$id","name":"$name","mac":"$mac","bonded":$bonded,"live":$live,"acl":$acl,"lastOk":$lastOk,"state":"$state"},"timestamp":${System.currentTimeMillis()}}""",
+          )
+          // #endregion
           o.put("state", state)
           o.put("bonded", bonded)
           o.put("live", live)
