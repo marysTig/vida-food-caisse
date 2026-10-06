@@ -23,16 +23,31 @@ export interface HubPrintWorkerPlugin {
   getWorkerStatus(): Promise<HubPrintWorkerStatus>;
   triggerManualRetry(): Promise<void>;
   wakeWorker(): Promise<void>;
+  listUsbDevices(): Promise<{ devices: UsbDeviceInfo[] }>;
   adminProbe(options: {
     printerName: string;
-    macAddress: string;
+    transport?: "bluetooth" | "usb";
+    macAddress?: string;
+    vendorId?: number;
+    productId?: number;
   }): Promise<{ ok: boolean; detail: string }>;
   adminTestPrint(options: {
     printerName: string;
-    macAddress: string;
+    transport?: "bluetooth" | "usb";
+    macAddress?: string;
+    vendorId?: number;
+    productId?: number;
     escposBase64: string;
   }): Promise<{ ok: boolean; detail: string }>;
 }
+
+export type UsbDeviceInfo = {
+  vendorId: number;
+  productId: number;
+  deviceName: string;
+  productName: string | null;
+  hasPermission: boolean;
+};
 
 const HubPrintWorker = registerPlugin<HubPrintWorkerPlugin>("HubPrintWorker");
 
@@ -128,7 +143,24 @@ export async function nativeAdminProbe(
   printerName: string,
   macAddress: string,
 ): Promise<{ ok: boolean; detail: string }> {
-  return HubPrintWorker.adminProbe({ printerName, macAddress });
+  return HubPrintWorker.adminProbe({
+    printerName,
+    transport: "bluetooth",
+    macAddress,
+  });
+}
+
+export async function nativeAdminUsbProbe(
+  printerName: string,
+  vendorId: number,
+  productId: number,
+): Promise<{ ok: boolean; detail: string }> {
+  return HubPrintWorker.adminProbe({
+    printerName,
+    transport: "usb",
+    vendorId,
+    productId,
+  });
 }
 
 export async function nativeAdminTestPrint(
@@ -138,9 +170,36 @@ export async function nativeAdminTestPrint(
 ): Promise<{ ok: boolean; detail: string }> {
   return HubPrintWorker.adminTestPrint({
     printerName,
+    transport: "bluetooth",
     macAddress,
     escposBase64,
   });
+}
+
+export async function nativeAdminUsbTestPrint(
+  printerName: string,
+  vendorId: number,
+  productId: number,
+  escposBase64: string,
+): Promise<{ ok: boolean; detail: string }> {
+  return HubPrintWorker.adminTestPrint({
+    printerName,
+    transport: "usb",
+    vendorId,
+    productId,
+    escposBase64,
+  });
+}
+
+export async function nativeListUsbDevices(): Promise<UsbDeviceInfo[]> {
+  if (!isNativePrintWorkerPlatform()) return [];
+  try {
+    const ret = await HubPrintWorker.listUsbDevices();
+    return ret.devices ?? [];
+  } catch (err) {
+    console.warn("[HubPrintWorker] listUsbDevices failed", err);
+    return [];
+  }
 }
 
 export async function nativeTriggerManualRetry(): Promise<void> {

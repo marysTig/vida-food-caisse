@@ -82,6 +82,11 @@ async function sendJobBytes(
   job: PrintJob,
   data: Uint8Array,
 ): Promise<"ok" | "aborted"> {
+  if ((job.transport ?? "bluetooth") === "usb") {
+    throw new Error(
+      "Impression USB — démarrez le hub natif. Le drain JS ne gère pas USB.",
+    );
+  }
   const mac = (job.mac_address ?? "").trim();
   const name = job.printer_name ?? "imprimante";
   if (!mac) throw new Error("Adresse MAC manquante");

@@ -15,6 +15,8 @@ import {
   isNativePrintWorkerActive,
   nativeAdminProbe,
   nativeAdminTestPrint,
+  nativeAdminUsbProbe,
+  nativeAdminUsbTestPrint,
 } from "@/lib/hubPrintWorkerPlugin";
 import { openCircuit } from "@/lib/kitchenCircuitBreaker";
 import {
@@ -23,6 +25,7 @@ import {
   encodeEscPosText,
   uint8ToBase64,
 } from "@/lib/escposTickets";
+import { isPrinterEndpointConfigured } from "@/lib/printerStore";
 
 declare global {
   interface Window {
@@ -228,19 +231,37 @@ export const printerService = {
         detail: ok ? "Web Bluetooth connecté" : "Web Bluetooth non connecté",
       };
     }
-    const mac = (printer.mac_address ?? "").trim();
-    if (!mac) {
-      return { ok: false, detail: "Adresse MAC manquante" };
+    if (!isPrinterEndpointConfigured(printer)) {
+      return {
+        ok: false,
+        detail:
+          printer.transport === "usb"
+            ? "USB vendor/product manquant"
+            : "Adresse MAC manquante",
+      };
     }
     if (isNativePrintWorkerActive()) {
       try {
-        return await nativeAdminProbe(printer.name, mac);
+        if (printer.transport === "usb") {
+          return await nativeAdminUsbProbe(
+            printer.name,
+            printer.usb_vendor_id!,
+            printer.usb_product_id!,
+          );
+        }
+        return await nativeAdminProbe(printer.name, printer.mac_address!.trim());
       } catch (err: unknown) {
         return {
           ok: false,
           detail: err instanceof Error ? err.message : String(err),
         };
       }
+    }
+    if (printer.transport === "usb") {
+      return {
+        ok: false,
+        detail: "Hub natif requis pour le probe USB",
+      };
     }
     return runProbeConnect(printer);
   },
@@ -268,15 +289,31 @@ export const printerService = {
     const data = this.encodeText(ticket);
     if (this.isNativePlatform()) {
       if (isNativePrintWorkerActive()) {
-        const mac = (printer.mac_address ?? "").trim();
-        if (!mac) throw new Error("Adresse MAC manquante");
-        const result = await nativeAdminTestPrint(
-          printer.name,
-          mac,
-          uint8ToBase64(data),
-        );
+        if (!isPrinterEndpointConfigured(printer)) {
+          throw new Error(
+            printer.transport === "usb"
+              ? "USB vendor/product manquant"
+              : "Adresse MAC manquante",
+          );
+        }
+        const result =
+          printer.transport === "usb"
+            ? await nativeAdminUsbTestPrint(
+                printer.name,
+                printer.usb_vendor_id!,
+                printer.usb_product_id!,
+                uint8ToBase64(data),
+              )
+            : await nativeAdminTestPrint(
+                printer.name,
+                printer.mac_address!.trim(),
+                uint8ToBase64(data),
+              );
         if (!result.ok) throw new Error(result.detail);
         return;
+      }
+      if (printer.transport === "usb") {
+        throw new Error("Hub natif requis pour le test USB");
       }
       await runAdminTestPrint({ printer, data });
     } else {

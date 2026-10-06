@@ -2,10 +2,12 @@ import { toast } from "sonner";
 import type { CartItem } from "@/lib/cart";
 import type { GlobalSupplement } from "@/lib/globalSupplementsStore";
 import type { Printer } from "@/lib/printerStore";
+import { isPrinterEndpointConfigured } from "@/lib/printerStore";
 import { enqueueReceipt } from "@/lib/kitchenPrintQueue";
 import { logPrintActivity } from "@/lib/printActivityLog";
 import { wakePrintQueueDaemon } from "@/lib/printQueueDaemon";
 import { isLocalDevicePrimaryHub } from "@/lib/printSettingsStore";
+import { wakeNativePrintWorker } from "@/lib/hubPrintWorkerPlugin";
 
 export type CashierPrintResult = {
   attempted: number;
@@ -60,10 +62,15 @@ export async function runCashierReceiptPrint(params: {
   }
 
   const caisse = cashierPrinters[0]!;
-  const mac = (caisse.mac_address ?? "").trim();
-  if (!mac) {
-    const msg = `${caisse.name}: adresse MAC manquante — associez l'imprimante Bluetooth.`;
-    toast.error("MAC manquante (caisse)", { description: msg, duration: 7000 });
+  if (!isPrinterEndpointConfigured(caisse)) {
+    const msg =
+      caisse.transport === "usb"
+        ? `${caisse.name}: USB non configuré — sélectionnez le périphérique OTG.`
+        : `${caisse.name}: adresse MAC manquante — associez l'imprimante Bluetooth.`;
+    toast.error(
+      caisse.transport === "usb" ? "USB manquant (caisse)" : "MAC manquante (caisse)",
+      { description: msg, duration: 7000 },
+    );
     return { attempted: 1, succeeded: 0, errors: [msg] };
   }
 
@@ -88,7 +95,7 @@ export async function runCashierReceiptPrint(params: {
   }
 
   if (result.status === "noop" && result.reason === "no_printer") {
-    const msg = "Aucune imprimante caisse avec MAC.";
+    const msg = "Aucune imprimante caisse configurée (USB ou Bluetooth).";
     toast.error("Impression caisse impossible", { description: msg });
     return { attempted: 0, succeeded: 0, errors: [msg] };
   }
@@ -96,14 +103,18 @@ export async function runCashierReceiptPrint(params: {
   logPrintActivity({
     kind: "caisse",
     printerName: caisse.name,
-    mac,
+    mac:
+      caisse.transport === "usb"
+        ? `USB ${caisse.usb_vendor_id}:${caisse.usb_product_id}`
+        : (caisse.mac_address ?? ""),
     status: "started",
-    detail: `En file · ${label}`,
+    detail: `En file · ${label} · ${caisse.transport}`,
   });
 
   wakePrintQueueDaemon();
+  void wakeNativePrintWorker();
   toast.success("Ticket en file d'impression", {
-    description: caisse.name,
+    description: `${caisse.name} (${caisse.transport === "usb" ? "USB" : "BT"})`,
     duration: 2500,
   });
 

@@ -14,10 +14,15 @@ import android.os.PowerManager
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import com.marystig.vidafoodcaisse.print.EscPosBluetoothPrinter
+import com.marystig.vidafoodcaisse.print.EscPosUsbPrinter
 import com.marystig.vidafoodcaisse.print.PrintJobRepository
 import com.marystig.vidafoodcaisse.print.PrintWorkerLoop
 import com.marystig.vidafoodcaisse.print.WorkerConfig
 import com.marystig.vidafoodcaisse.print.WorkerRuntime
+import android.hardware.usb.UsbManager
+import android.content.BroadcastReceiver
+import android.content.IntentFilter
+import android.hardware.usb.UsbDevice
 
 /**
  * Foreground service that owns RFCOMM + print_jobs drain (Phase 1).
@@ -43,10 +48,47 @@ class HubPrintWorkerService : Service() {
 
   private var loop: PrintWorkerLoop? = null
   private var wakeLock: PowerManager.WakeLock? = null
+  private var usbDetachRegistered = false
+
+  private val usbDetachReceiver = object : BroadcastReceiver() {
+    override fun onReceive(context: Context?, intent: Intent?) {
+      if (intent?.action != UsbManager.ACTION_USB_DEVICE_DETACHED) return
+      val device = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+        intent.getParcelableExtra(UsbManager.EXTRA_DEVICE, UsbDevice::class.java)
+      } else {
+        @Suppress("DEPRECATION")
+        intent.getParcelableExtra(UsbManager.EXTRA_DEVICE) as? UsbDevice
+      } ?: return
+      loop?.onUsbDeviceDetached(device)
+    }
+  }
 
   override fun onCreate() {
     super.onCreate()
     ensureChannel()
+    registerUsbDetach()
+  }
+
+  private fun registerUsbDetach() {
+    if (usbDetachRegistered) return
+    val filter = IntentFilter(UsbManager.ACTION_USB_DEVICE_DETACHED)
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+      registerReceiver(usbDetachReceiver, filter, RECEIVER_NOT_EXPORTED)
+    } else {
+      @Suppress("UnspecifiedRegisterReceiverFlag")
+      registerReceiver(usbDetachReceiver, filter)
+    }
+    usbDetachRegistered = true
+  }
+
+  private fun unregisterUsbDetach() {
+    if (!usbDetachRegistered) return
+    try {
+      unregisterReceiver(usbDetachReceiver)
+    } catch (_: Exception) {
+      /* ignore */
+    }
+    usbDetachRegistered = false
   }
 
   override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -88,9 +130,10 @@ class HubPrintWorkerService : Service() {
     val deviceId = WorkerConfig.deviceId(this)!!
 
     acquireWakeLock()
-    val printer = EscPosBluetoothPrinter()
+    val btPrinter = EscPosBluetoothPrinter()
+    val usbPrinter = EscPosUsbPrinter(applicationContext)
     val repo = PrintJobRepository(url, key, deviceId)
-    val worker = PrintWorkerLoop(repo, printer) { running, depth, err ->
+    val worker = PrintWorkerLoop(repo, btPrinter, usbPrinter) { running, depth, err ->
       WorkerRuntime.running = running
       WorkerRuntime.queueDepth = depth
       WorkerRuntime.lastError = err
@@ -99,7 +142,7 @@ class HubPrintWorkerService : Service() {
     loop = worker
     WorkerRuntime.loop = worker
     worker.start()
-    Log.i(TAG, "worker loop started · device=$deviceId")
+    Log.i(TAG, "worker loop started · device=$deviceId · usb+bt")
   }
 
   private fun teardown(reason: String) {
@@ -132,6 +175,7 @@ class HubPrintWorkerService : Service() {
   }
 
   override fun onDestroy() {
+    unregisterUsbDetach()
     teardown("onDestroy")
     stopForegroundCompat()
     super.onDestroy()
@@ -155,7 +199,7 @@ class HubPrintWorkerService : Service() {
       "Hub d'impression",
       NotificationManager.IMPORTANCE_LOW,
     ).apply {
-      description = "Worker natif d'impression Bluetooth"
+      description = "Worker natif d'impression USB + Bluetooth"
       setShowBadge(false)
     }
     getSystemService(NotificationManager::class.java)?.createNotificationChannel(channel)
@@ -181,7 +225,7 @@ class HubPrintWorkerService : Service() {
       else -> "File: 0 · OK"
     }
     return NotificationCompat.Builder(this, CHANNEL_ID)
-      .setContentTitle("Impression cuisine — hub actif")
+      .setContentTitle("Impression hub — USB + Bluetooth")
       .setContentText(status)
       .setSmallIcon(R.mipmap.ic_launcher)
       .setOngoing(true)

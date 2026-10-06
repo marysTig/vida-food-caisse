@@ -8,6 +8,7 @@ import { isNativePrintWorkerActive } from "@/lib/hubPrintWorkerPlugin";
 import { hasActivePrintJobs } from "@/lib/kitchenPrintQueue";
 import { printerService } from "@/lib/printerService";
 import { getPrintersFromStore, type Printer } from "@/lib/printerStore";
+import { isPrinterEndpointConfigured } from "@/lib/printerStore";
 
 export type PrinterReachability = {
   status: "unknown" | "checking" | "ok" | "fail" | "busy";
@@ -146,7 +147,10 @@ export async function probeAllPrinters(options?: {
   const enabledOnly = options?.enabledOnly !== false;
   const candidates = getPrintersFromStore().filter(
     (p) =>
-      (!enabledOnly || p.enabled) && (p.mac_address ?? "").trim() !== "",
+      (!enabledOnly || p.enabled) &&
+      isPrinterEndpointConfigured(p) &&
+      // Auto-probe is Bluetooth-oriented; USB is probed via Admin / native USB lane.
+      (p.transport ?? "bluetooth") === "bluetooth",
   );
 
   if (options?.skipIfBusyQueue !== false && (await hasActivePrintJobs())) {

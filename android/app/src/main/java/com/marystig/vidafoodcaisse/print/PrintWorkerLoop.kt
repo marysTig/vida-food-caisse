@@ -11,21 +11,23 @@ import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 
 /**
- * Split radio / net drain:
- * - Radio thread: take local job → RFCOMM write → enqueue ack (no HTTP)
- * - Net thread: claimBatch RPC → local queue; drain acks → markDone / retry / fingerprints
- * Admin BT ops run on the radio thread via adminQueue.
+ * Split USB / Bluetooth / net drain:
+ * - USB thread: Caisse (and any transport=usb) → EscPosUsbPrinter
+ * - Radio thread: Kitchen (bluetooth) → EscPosBluetoothPrinter
+ * - Net thread: claimBatch RPC → local queue; drain acks
+ * Admin BT ops on radio thread; Admin USB ops on USB thread.
  */
 class PrintWorkerLoop(
   private val repo: PrintJobRepository,
-  private val printer: EscPosBluetoothPrinter,
+  private val btPrinter: EscPosBluetoothPrinter,
+  private val usbPrinter: EscPosUsbPrinter,
   private val onStatus: (running: Boolean, queueDepth: Int, lastError: String?) -> Unit,
 ) {
   companion object {
     private const val TAG = "PrintWorkerLoop"
-    /** Idle claim interval — Realtime wake covers new jobs; avoid RPC spam. */
     private const val POLL_IDLE_MS = 2_500L
     private const val RADIO_THREAD = "HubPrintRadio"
+    private const val USB_THREAD = "HubPrintUsb"
     private const val NET_THREAD = "HubPrintNet"
   }
 
@@ -58,9 +60,11 @@ class PrintWorkerLoop(
   private val lastError = AtomicReference<String?>(null)
   private val localQueue = LocalPrintQueue()
   private val ackQueue = LinkedBlockingQueue<Ack>()
-  private val adminQueue = LinkedBlockingQueue<() -> Unit>()
+  private val adminBtQueue = LinkedBlockingQueue<() -> Unit>()
+  private val adminUsbQueue = LinkedBlockingQueue<() -> Unit>()
 
   private var radioExecutor: ExecutorService? = null
+  private var usbExecutor: ExecutorService? = null
   private var netExecutor: ExecutorService? = null
 
   fun isRunning(): Boolean = running.get()
@@ -69,21 +73,32 @@ class PrintWorkerLoop(
 
   fun localQueueDepth(): Int = localQueue.depth()
 
+  fun listUsbDevices(): List<EscPosUsbPrinter.UsbDeviceInfo> = usbPrinter.listDevices()
+
   fun wake() {
     wake.set(true)
   }
 
+  fun onUsbDeviceDetached(device: android.hardware.usb.UsbDevice) {
+    usbPrinter.onDeviceDetached(device)
+  }
+
   fun start() {
     if (!running.compareAndSet(false, true)) return
-    printer.forceClose("loop-start")
+    btPrinter.forceClose("loop-start")
+    usbPrinter.forceClose("loop-start")
 
     val radio = Executors.newSingleThreadExecutor { r ->
       Thread(r, RADIO_THREAD).apply { isDaemon = true }
+    }
+    val usb = Executors.newSingleThreadExecutor { r ->
+      Thread(r, USB_THREAD).apply { isDaemon = true }
     }
     val net = Executors.newSingleThreadExecutor { r ->
       Thread(r, NET_THREAD).apply { isDaemon = true }
     }
     radioExecutor = radio
+    usbExecutor = usb
     netExecutor = net
 
     net.execute {
@@ -96,24 +111,27 @@ class PrintWorkerLoop(
       netLoop()
     }
     radio.execute { radioLoop() }
+    usb.execute { usbLoop() }
     onStatus(true, 0, null)
-    Log.i(TAG, "started · radio+net split")
+    Log.i(TAG, "started · usb+radio+net split")
   }
 
   fun stop() {
     running.set(false)
     wake.set(true)
     radioExecutor?.shutdownNow()
+    usbExecutor?.shutdownNow()
     netExecutor?.shutdownNow()
     radioExecutor = null
+    usbExecutor = null
     netExecutor = null
-    printer.forceClose("loop-stop")
+    btPrinter.forceClose("loop-stop")
+    usbPrinter.forceClose("loop-stop")
     onStatus(false, 0, lastError.get())
     Log.i(TAG, "stopped")
   }
 
   fun triggerManualRetry() {
-    // Net work — schedule on net executor
     netExecutor?.execute {
       try {
         val n = repo.retryAllNeedsManual()
@@ -134,17 +152,34 @@ class PrintWorkerLoop(
     }
   }
 
-  /** Run Admin probe on the radio thread — never while production work is queued. */
   fun adminProbe(printerName: String, mac: String): Pair<Boolean, String> {
     return runOnRadioBlocking {
       try {
-        if (localQueue.depth() > 0 || repo.countActiveJobs() > 0) {
+        if (localQueue.hasBtWork() || repo.countActiveJobs() > 0) {
           return@runOnRadioBlocking false to "File d'impression active — probe différé"
         }
-        printer.probeConnect(printerName, mac)
-        true to "Joignable (ping OK)"
+        btPrinter.probeConnect(printerName, mac)
+        true to "Joignable Bluetooth (ping OK)"
       } catch (e: Exception) {
-        false to (e.message ?: "Erreur probe")
+        false to (e.message ?: "Erreur probe BT")
+      }
+    }
+  }
+
+  fun adminUsbProbe(
+    printerName: String,
+    vendorId: Int,
+    productId: Int,
+  ): Pair<Boolean, String> {
+    return runOnUsbBlocking {
+      try {
+        if (localQueue.hasUsbWork()) {
+          return@runOnUsbBlocking false to "File USB active — probe différé"
+        }
+        usbPrinter.probeConnect(printerName, vendorId, productId)
+        true to "Joignable USB (ping OK)"
+      } catch (e: Exception) {
+        false to (e.message ?: "Erreur probe USB")
       }
     }
   }
@@ -152,14 +187,34 @@ class PrintWorkerLoop(
   fun adminTestPrint(printerName: String, mac: String, escposBase64: String): Pair<Boolean, String> {
     return runOnRadioBlocking {
       try {
-        if (localQueue.depth() > 0) {
+        if (localQueue.hasBtWork()) {
           return@runOnRadioBlocking false to "File d'impression active — test différé"
         }
-        printer.sendEscPos(printerName, mac, escposBase64, isReceipt = true)
+        btPrinter.sendEscPos(printerName, mac, escposBase64, isReceipt = true)
         true to "OK"
       } catch (e: Exception) {
-        printer.hardSettle("admin-test-fail")
-        false to (e.message ?: "Erreur impression test")
+        btPrinter.hardSettle("admin-test-fail")
+        false to (e.message ?: "Erreur impression test BT")
+      }
+    }
+  }
+
+  fun adminUsbTestPrint(
+    printerName: String,
+    vendorId: Int,
+    productId: Int,
+    escposBase64: String,
+  ): Pair<Boolean, String> {
+    return runOnUsbBlocking {
+      try {
+        if (localQueue.hasUsbWork()) {
+          return@runOnUsbBlocking false to "File USB active — test différé"
+        }
+        usbPrinter.sendEscPos(printerName, vendorId, productId, escposBase64)
+        true to "OK"
+      } catch (e: Exception) {
+        usbPrinter.forceClose("admin-test-fail")
+        false to (e.message ?: "Erreur impression test USB")
       }
     }
   }
@@ -169,7 +224,7 @@ class PrintWorkerLoop(
       block()
       return
     }
-    adminQueue.offer(block)
+    adminBtQueue.offer(block)
     wake()
   }
 
@@ -178,7 +233,7 @@ class PrintWorkerLoop(
     val latch = CountDownLatch(1)
     val result = AtomicReference<Any?>()
     val error = AtomicReference<Exception?>()
-    adminQueue.offer {
+    adminBtQueue.offer {
       try {
         result.set(block())
       } catch (e: Exception) {
@@ -196,13 +251,47 @@ class PrintWorkerLoop(
     return result.get() as T
   }
 
-  private fun drainAdminOps() {
+  private fun <T> runOnUsbBlocking(block: () -> T): T {
+    if (Thread.currentThread().name == USB_THREAD) return block()
+    val latch = CountDownLatch(1)
+    val result = AtomicReference<Any?>()
+    val error = AtomicReference<Exception?>()
+    adminUsbQueue.offer {
+      try {
+        result.set(block())
+      } catch (e: Exception) {
+        error.set(e)
+      } finally {
+        latch.countDown()
+      }
+    }
+    wake()
+    if (!latch.await(90, TimeUnit.SECONDS)) {
+      throw IOException("Admin USB op timeout — worker busy")
+    }
+    error.get()?.let { throw it }
+    @Suppress("UNCHECKED_CAST")
+    return result.get() as T
+  }
+
+  private fun drainAdminBtOps() {
     while (true) {
-      val op = adminQueue.poll() ?: break
+      val op = adminBtQueue.poll() ?: break
       try {
         op()
       } catch (e: Exception) {
-        Log.w(TAG, "admin op failed", e)
+        Log.w(TAG, "admin BT op failed", e)
+      }
+    }
+  }
+
+  private fun drainAdminUsbOps() {
+    while (true) {
+      val op = adminUsbQueue.poll() ?: break
+      try {
+        op()
+      } catch (e: Exception) {
+        Log.w(TAG, "admin USB op failed", e)
       }
     }
   }
@@ -223,7 +312,6 @@ class PrintWorkerLoop(
           }
         }
 
-        // Claim only on wake OR idle interval when empty — never every tick (Logcat storm).
         val woke = wake.compareAndSet(true, false)
         val idleDue =
           localQueue.isEmpty() && (now - lastClaimAttemptMs >= POLL_IDLE_MS)
@@ -244,7 +332,7 @@ class PrintWorkerLoop(
               "net claim · batch=${batch.size} added=$added local=${localQueue.depth()} " +
                 "claim_ms=${System.currentTimeMillis() - t0}",
             )
-            wake.set(true) // nudge radio
+            wake.set(true)
           }
         }
 
@@ -297,9 +385,6 @@ class PrintWorkerLoop(
             Log.i(TAG, "ack fail · ${ack.job.id.take(8)} · ack_lag_ms=$lag")
           }
           is Ack.Preempt -> {
-            // Job stays in local kitchen front; release DB claim so reclaim is clean
-            // if process dies — but keep printing status until re-taken would double-claim.
-            // Local requeue already holds the job; leave status=printing until Done/Fail.
             Log.i(TAG, "ack preempt local · ${ack.job.id.take(8)} · ack_lag_ms=$lag")
           }
           is Ack.BadPayload -> {
@@ -310,7 +395,6 @@ class PrintWorkerLoop(
       } catch (e: Exception) {
         Log.e(TAG, "ack processing failed", e)
         lastError.set(e.message)
-        // Re-offer once later
         if (ack is Ack.Done) {
           ackQueue.offer(ack)
           break
@@ -322,33 +406,22 @@ class PrintWorkerLoop(
   private fun radioLoop() {
     while (running.get()) {
       try {
-        // Production first: do not run admin probe while jobs are waiting (Logcat 17:47).
-        if (localQueue.isEmpty()) {
-          drainAdminOps()
+        if (!localQueue.hasBtWork()) {
+          drainAdminBtOps()
         }
-        printer.closeIfKeepaliveExpired()
+        btPrinter.closeIfKeepaliveExpired()
 
-        // Prefer receipts already in local queue (preempt kitchen start)
-        var job = localQueue.take()
+        val job = localQueue.takeBluetooth()
         if (job == null) {
-          // Idle — drain deferred admin ops
-          drainAdminOps()
-          onStatus(true, 0, lastError.get())
+          drainAdminBtOps()
+          onStatus(true, localQueue.depth(), lastError.get())
           sleepInterruptible(POLL_IDLE_MS)
           continue
         }
 
-        // If we took kitchen but a receipt arrived, put kitchen back and take receipt
-        if (job.jobType != "receipt" && localQueue.hasReceipt()) {
-          Log.i(TAG, "local preempt — receipt waiting, requeue kitchen ${job.id.take(8)}")
-          localQueue.requeueKitchenFront(job)
-          job = localQueue.take() ?: continue
-        }
-
         onStatus(true, localQueue.depth() + 1, lastError.get())
-        processRadioJob(job)
-        // No busy poll when more work is local
-        if (localQueue.isEmpty()) {
+        processBluetoothJob(job)
+        if (!localQueue.hasBtWork()) {
           sleepInterruptible(0)
         }
       } catch (e: InterruptedException) {
@@ -362,12 +435,82 @@ class PrintWorkerLoop(
     }
   }
 
-  private fun processRadioJob(job: NativePrintJob) {
+  private fun usbLoop() {
+    while (running.get()) {
+      try {
+        if (!localQueue.hasUsbWork()) {
+          drainAdminUsbOps()
+        }
+        usbPrinter.closeIfKeepaliveExpired()
+
+        val job = localQueue.takeUsb()
+        if (job == null) {
+          drainAdminUsbOps()
+          onStatus(true, localQueue.depth(), lastError.get())
+          sleepInterruptible(POLL_IDLE_MS)
+          continue
+        }
+
+        onStatus(true, localQueue.depth() + 1, lastError.get())
+        processUsbJob(job)
+        if (!localQueue.hasUsbWork()) {
+          sleepInterruptible(0)
+        }
+      } catch (e: InterruptedException) {
+        Thread.currentThread().interrupt()
+        break
+      } catch (e: Exception) {
+        Log.e(TAG, "usb loop error", e)
+        lastError.set(e.message)
+        sleepInterruptible(500)
+      }
+    }
+  }
+
+  private fun processUsbJob(job: NativePrintJob) {
+    val name = job.printerName ?: "imprimante"
+    val vid = job.usbVendorId
+    val pid = job.usbProductId
+    val b64 = job.escposBase64
+    Log.i(TAG, "USB PRINT START · ${job.jobType} → $name · queue_depth=${localQueue.depth()}")
+
+    if (vid == null || pid == null || b64.isNullOrBlank()) {
+      ackQueue.offer(
+        Ack.BadPayload(job, "Payload ou USB vendor/product manquant", System.currentTimeMillis()),
+      )
+      wake()
+      return
+    }
+
+    try {
+      val timing = usbPrinter.sendEscPos(name, vid, pid, b64)
+      ackQueue.offer(Ack.Done(job, System.currentTimeMillis()))
+      wake()
+      Log.i(
+        TAG,
+        "USB PRINT END OK · $name · reuse=${timing.reused} · " +
+          "connect=${timing.connectMs} write=${timing.writeMs}",
+      )
+    } catch (e: Exception) {
+      val msg = e.message ?: "Erreur impression USB"
+      Log.e(TAG, "USB PRINT FAIL · $name · $msg", e)
+      lastError.set(msg)
+      try {
+        usbPrinter.forceClose("job-fail:$name")
+      } catch (_: Exception) {
+        /* ignore */
+      }
+      ackQueue.offer(Ack.Fail(job, msg, System.currentTimeMillis()))
+      wake()
+    }
+  }
+
+  private fun processBluetoothJob(job: NativePrintJob) {
     val name = job.printerName ?: "imprimante"
     val mac = job.macAddress
     val b64 = job.escposBase64
     val depth = localQueue.depth()
-    Log.i(TAG, "PRINT START · ${job.jobType} → $name · queue_depth=$depth")
+    Log.i(TAG, "BT PRINT START · ${job.jobType} → $name · queue_depth=$depth")
 
     if (mac.isNullOrBlank() || b64.isNullOrBlank()) {
       ackQueue.offer(Ack.BadPayload(job, "Payload ou MAC manquant", System.currentTimeMillis()))
@@ -377,12 +520,12 @@ class PrintWorkerLoop(
 
     val isReceipt = job.jobType == "receipt"
 
-    // Kitchen: if receipt is already local, preempt before connect
-    if (!isReceipt && localQueue.hasReceipt()) {
-      Log.i(TAG, "receipt in local queue — requeue kitchen ${job.id.take(8)}")
+    // Preempt BT kitchen only for BT receipts (USB receipts use the USB thread).
+    if (!isReceipt && localQueue.hasBtReceipt()) {
+      Log.i(TAG, "BT receipt waiting — requeue kitchen ${job.id.take(8)}")
       localQueue.requeueKitchenFront(job)
-      if (printer.isRadioDirty() || printer.wasMidWrite()) {
-        printer.hardSettle("receipt-preempt")
+      if (btPrinter.isRadioDirty() || btPrinter.wasMidWrite()) {
+        btPrinter.hardSettle("receipt-preempt")
       }
       ackQueue.offer(Ack.Preempt(job, System.currentTimeMillis()))
       wake()
@@ -390,27 +533,25 @@ class PrintWorkerLoop(
     }
 
     try {
-      val timing = printer.sendEscPos(name, mac, b64, isReceipt)
-      // Mid-write receipt: check after write — next iteration will prefer receipt
+      val timing = btPrinter.sendEscPos(name, mac, b64, isReceipt)
       ackQueue.offer(Ack.Done(job, System.currentTimeMillis()))
       wake()
       Log.i(
         TAG,
-        "PRINT END OK · $name · reuse=${timing.reused} · " +
+        "BT PRINT END OK · $name · reuse=${timing.reused} · " +
           "gap=${timing.gapMs} settle=${timing.settleMs} " +
           "connect=${timing.connectMs} write=${timing.writeMs}",
       )
     } catch (e: Exception) {
       val msg = e.message ?: "Erreur impression"
-      Log.e(TAG, "PRINT FAIL · $name · $msg", e)
+      Log.e(TAG, "BT PRINT FAIL · $name · $msg", e)
       lastError.set(msg)
       try {
-        printer.hardSettle("job-fail:$name")
+        btPrinter.hardSettle("job-fail:$name")
       } catch (_: Exception) {
         /* ignore */
       }
-      // If receipt arrived locally during fail, treat as preempt (no attempt++)
-      if (!isReceipt && localQueue.hasReceipt()) {
+      if (!isReceipt && localQueue.hasBtReceipt()) {
         localQueue.requeueKitchenFront(job)
         ackQueue.offer(Ack.Preempt(job, System.currentTimeMillis()))
       } else {
@@ -421,19 +562,11 @@ class PrintWorkerLoop(
   }
 
   private fun sleepInterruptible(ms: Long) {
-    if (ms <= 0L) {
-      if (wake.compareAndSet(true, false)) return
-      return
-    }
-    val end = System.currentTimeMillis() + ms
-    while (running.get() && System.currentTimeMillis() < end) {
-      if (wake.compareAndSet(true, false)) return
-      try {
-        Thread.sleep(50)
-      } catch (_: InterruptedException) {
-        Thread.currentThread().interrupt()
-        return
-      }
+    if (ms <= 0L) return
+    try {
+      Thread.sleep(ms)
+    } catch (_: InterruptedException) {
+      Thread.currentThread().interrupt()
     }
   }
 }

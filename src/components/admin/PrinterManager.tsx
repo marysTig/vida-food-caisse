@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { Printer as PrinterIcon, Plus, Trash2, Edit2, Check, X, Bluetooth, BluetoothConnected, Tablet, RefreshCw } from "lucide-react";
 import { toast } from "sonner";
-import { usePrinterStore, type Printer, type PrinterType } from "@/lib/printerStore";
+import { usePrinterStore, type Printer, type PrinterType, type PrinterTransport, formatUsbId } from "@/lib/printerStore";
 import { useMenuStore } from "@/lib/menuStore";
 import { printerService } from "@/lib/printerService";
 import { usePrintSettingsStore } from "@/lib/printSettingsStore";
@@ -21,6 +21,7 @@ import {
   subscribePrinterReachability,
   type PrinterReachability,
 } from "@/lib/printerProbe";
+import { nativeListUsbDevices, type UsbDeviceInfo } from "@/lib/hubPrintWorkerPlugin";
 import { ComponentLoader } from "@/components/ui/PageLoader";
 import { Switch } from "@/components/ui/switch";
 
@@ -42,6 +43,7 @@ export function PrinterManager() {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [formData, setFormData] = useState<Partial<Printer>>({});
   const [pairedDevices, setPairedDevices] = useState<{ name: string; address: string }[]>([]);
+  const [usbDevices, setUsbDevices] = useState<UsbDeviceInfo[]>([]);
   const [scanning, setScanning] = useState(false);
   const [recentJobs, setRecentJobs] = useState<KitchenPrintJob[]>([]);
   const [activity, setActivity] = useState<PrintActivityEntry[]>(() => getPrintActivity());
@@ -137,7 +139,10 @@ export function PrinterManager() {
         await addPrinter({
           name: formData.name || "",
           type,
+          transport: formData.transport ?? "bluetooth",
           mac_address: formData.mac_address ?? null,
+          usb_vendor_id: formData.usb_vendor_id ?? null,
+          usb_product_id: formData.usb_product_id ?? null,
           enabled: willEnable,
           categories: [],
           category_ids: type === "caisse" ? [] : (formData.category_ids ?? []),
@@ -152,6 +157,7 @@ export function PrinterManager() {
       }
       setEditingId(null);
       setFormData({});
+      setUsbDevices([]);
       toast.success("Imprimante enregistrée");
     } catch (err: any) {
       toast.error("Erreur lors de l'enregistrement", { description: err.message });
@@ -162,6 +168,7 @@ export function PrinterManager() {
     setEditingId(null);
     setFormData({});
     setPairedDevices([]);
+    setUsbDevices([]);
   };
 
   const scanDevices = async () => {
@@ -176,9 +183,27 @@ export function PrinterManager() {
     setScanning(false);
   };
 
+  const scanUsbDevices = async () => {
+    setScanning(true);
+    try {
+      const devices = await nativeListUsbDevices();
+      setUsbDevices(devices);
+      if (devices.length === 0) {
+        toast.info("Aucun périphérique USB. Branchez l'imprimante via OTG.");
+      }
+    } catch (err: any) {
+      toast.error("Erreur scan USB", { description: err.message });
+    }
+    setScanning(false);
+  };
+
   const handleTestPrint = async (printer: Printer) => {
     try {
-      toast.info("Connexion / test Bluetooth…");
+      toast.info(
+        printer.transport === "usb"
+          ? "Connexion / test USB…"
+          : "Connexion / test Bluetooth…",
+      );
       const reach = await probePrinter(printer);
       if (!reach.ok) {
         toast.error("Imprimante injoignable", { description: reach.detail });
@@ -230,6 +255,11 @@ export function PrinterManager() {
                 setFormData({
                   ...formData,
                   type,
+                  // Cuisine stays Bluetooth; Caisse can be USB or BT.
+                  transport:
+                    type === "cuisine"
+                      ? "bluetooth"
+                      : (formData.transport ?? "bluetooth"),
                   category_ids: type === "caisse" ? [] : formData.category_ids || [],
                 });
               }}
@@ -241,7 +271,114 @@ export function PrinterManager() {
           </div>
         </div>
 
-        {printerService.isNativePlatform() && (
+        {(formData.type || "caisse") === "caisse" && printerService.isNativePlatform() && (
+          <div>
+            <label className="mb-1 block text-xs font-semibold text-muted-foreground">
+              Connexion Caisse
+            </label>
+            <select
+              value={formData.transport || "bluetooth"}
+              onChange={(e) => {
+                const transport = e.target.value as PrinterTransport;
+                setFormData({
+                  ...formData,
+                  transport,
+                  ...(transport === "usb"
+                    ? { mac_address: null }
+                    : { usb_vendor_id: null, usb_product_id: null }),
+                });
+                setPairedDevices([]);
+                setUsbDevices([]);
+              }}
+              className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground focus:border-primary focus:outline-none"
+            >
+              <option value="usb">USB OTG (recommandé)</option>
+              <option value="bluetooth">Bluetooth</option>
+            </select>
+          </div>
+        )}
+
+        {printerService.isNativePlatform() &&
+          (formData.transport || "bluetooth") === "usb" &&
+          (formData.type || "caisse") === "caisse" && (
+          <div>
+            <label className="mb-1 block text-xs font-semibold text-muted-foreground">
+              Périphérique USB (vendorId:productId)
+            </label>
+            <div className="flex gap-2">
+              <input
+                type="text"
+                readOnly
+                value={
+                  formData.usb_vendor_id != null && formData.usb_product_id != null
+                    ? formatUsbId(formData.usb_vendor_id, formData.usb_product_id)
+                    : ""
+                }
+                placeholder="Sélectionnez un périphérique →"
+                className="flex-1 rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground focus:border-primary focus:outline-none font-mono"
+              />
+              <button
+                type="button"
+                onClick={() => void scanUsbDevices()}
+                disabled={scanning}
+                className="rounded-lg border border-border bg-secondary px-3 py-2 text-sm font-medium text-secondary-foreground hover:bg-secondary/80 disabled:opacity-50"
+              >
+                {scanning ? "Recherche..." : "USB"}
+              </button>
+            </div>
+            {usbDevices.length > 0 && (
+              <div className="mt-2 flex flex-col gap-1 rounded-md border border-border bg-muted/30 p-2 max-h-40 overflow-y-auto">
+                <p className="text-xs text-muted-foreground mb-1 font-semibold">
+                  Périphériques USB branchés :
+                </p>
+                {usbDevices.map((d) => {
+                  const selected =
+                    formData.usb_vendor_id === d.vendorId &&
+                    formData.usb_product_id === d.productId;
+                  return (
+                    <button
+                      key={`${d.vendorId}:${d.productId}:${d.deviceName}`}
+                      type="button"
+                      onClick={() =>
+                        setFormData({
+                          ...formData,
+                          transport: "usb",
+                          usb_vendor_id: d.vendorId,
+                          usb_product_id: d.productId,
+                          mac_address: null,
+                        })
+                      }
+                      className={`flex items-center justify-between rounded px-3 py-2 text-left text-sm transition-colors ${
+                        selected
+                          ? "bg-primary text-primary-foreground font-medium"
+                          : "hover:bg-muted bg-background border border-transparent hover:border-border"
+                      }`}
+                    >
+                      <span>{d.productName || "Imprimante USB"}</span>
+                      <span
+                        className={`text-xs ${
+                          selected
+                            ? "text-primary-foreground/80"
+                            : "text-muted-foreground"
+                        }`}
+                      >
+                        {formatUsbId(d.vendorId, d.productId)}
+                        {!d.hasPermission ? " · permission ?" : ""}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+            <p className="text-[10px] text-muted-foreground mt-1">
+              Branchez la Caisse via câble USB-B → OTG. La permission Android sera demandée
+              au premier test / impression.
+            </p>
+          </div>
+        )}
+
+        {printerService.isNativePlatform() &&
+          (formData.transport || "bluetooth") !== "usb" && (
           <div>
             <label className="mb-1 block text-xs font-semibold text-muted-foreground">
               Appareil Bluetooth (Adresse MAC)
@@ -272,7 +409,15 @@ export function PrinterManager() {
                   <button
                     key={d.address}
                     type="button"
-                    onClick={() => setFormData({ ...formData, mac_address: d.address })}
+                    onClick={() =>
+                      setFormData({
+                        ...formData,
+                        transport: "bluetooth",
+                        mac_address: d.address,
+                        usb_vendor_id: null,
+                        usb_product_id: null,
+                      })
+                    }
                     className={`flex items-center justify-between rounded px-3 py-2 text-left text-sm transition-colors ${
                       formData.mac_address === d.address
                         ? "bg-primary text-primary-foreground font-medium"
@@ -586,6 +731,10 @@ export function PrinterManager() {
                 setFormData({
                   name: "",
                   type: "caisse",
+                  transport: "usb",
+                  mac_address: null,
+                  usb_vendor_id: null,
+                  usb_product_id: null,
                   categories: [],
                   category_ids: [],
                   enabled: true,
@@ -636,7 +785,11 @@ export function PrinterManager() {
                     <h3 className="font-bold text-foreground">{printer.name}</h3>
                     <p className="text-xs text-muted-foreground">Poste : {typeLabel}</p>
                     <p className="text-[10px] font-mono text-muted-foreground mt-0.5">
-                      {printer.mac_address || "MAC manquante"}
+                      {printer.transport === "usb"
+                        ? printer.usb_vendor_id != null && printer.usb_product_id != null
+                          ? `USB ${formatUsbId(printer.usb_vendor_id, printer.usb_product_id)}`
+                          : "USB non configuré"
+                        : printer.mac_address || "MAC manquante"}
                     </p>
                   </div>
                 </div>

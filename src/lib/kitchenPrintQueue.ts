@@ -10,7 +10,7 @@ import {
   type CartItem,
 } from "@/lib/cart";
 import type { GlobalSupplement } from "@/lib/globalSupplementsStore";
-import { getPrintersFromStore, type Printer } from "@/lib/printerStore";
+import { getPrintersFromStore, isPrinterEndpointConfigured, type Printer } from "@/lib/printerStore";
 import { useTableOrdersStore } from "@/lib/tableOrdersStore";
 import { getLocalPrintDeviceId } from "@/lib/printDevice";
 import {
@@ -61,6 +61,9 @@ export type PrintJob = {
   printer_id: string | null;
   printer_name: string | null;
   mac_address: string | null;
+  transport?: "bluetooth" | "usb";
+  usb_vendor_id?: number | null;
+  usb_product_id?: number | null;
   idempotency_key: string;
   status: PrintJobStatus;
   attempt_count: number;
@@ -290,7 +293,10 @@ export async function enqueueKitchenStations(
       priority: PRIORITY_KITCHEN,
       printer_id: printer.id,
       printer_name: printer.name,
+      transport: "bluetooth" as const,
       mac_address: mac,
+      usb_vendor_id: null,
+      usb_product_id: null,
       idempotency_key: idempotencyKey,
       status: "pending" as const,
       attempt_count: 0,
@@ -381,13 +387,17 @@ export async function enqueueReceipt(
 ): Promise<EnqueueReceiptResult> {
   const printers = params.printers ?? getPrintersFromStore();
   const caisse = printers.find(
-    (p) => p.enabled && p.type === "caisse" && (p.mac_address || "").trim() !== "",
+    (p) => p.enabled && p.type === "caisse" && isPrinterEndpointConfigured(p),
   );
   if (!caisse) {
     return { status: "noop", reason: "no_printer" };
   }
 
-  const mac = caisse.mac_address!.trim();
+  const transport = caisse.transport ?? "bluetooth";
+  const mac =
+    transport === "bluetooth" ? (caisse.mac_address ?? "").trim() : null;
+  const usbVendorId = transport === "usb" ? caisse.usb_vendor_id : null;
+  const usbProductId = transport === "usb" ? caisse.usb_product_id : null;
 
   // table_id column is uuid — never insert fake strings like "receipt-2"
   const uuidRe =
@@ -416,7 +426,7 @@ export async function enqueueReceipt(
     payload.globalSupplements = params.globalSupplements;
   }
 
-  console.log("[print_jobs] receipt insert…");
+  console.log("[print_jobs] receipt insert…", { transport });
   const { data, error } = await supabase
     .from("print_jobs")
     .insert({
@@ -425,7 +435,10 @@ export async function enqueueReceipt(
       priority: PRIORITY_RECEIPT,
       printer_id: caisse.id,
       printer_name: caisse.name,
+      transport,
       mac_address: mac,
+      usb_vendor_id: usbVendorId,
+      usb_product_id: usbProductId,
       idempotency_key: idempotencyKey,
       status: "pending",
       attempt_count: 0,
@@ -472,7 +485,10 @@ export async function enqueueConsolKitchenJob(params: {
       priority: PRIORITY_KITCHEN,
       printer_id: targetPrinter.id,
       printer_name: targetPrinter.name,
+      transport: "bluetooth",
       mac_address: mac,
+      usb_vendor_id: null,
+      usb_product_id: null,
       idempotency_key: idempotencyKey,
       status: "pending",
       attempt_count: 0,
@@ -810,6 +826,11 @@ function mapJobRow(row: any): PrintJob {
     printer_id: (row.printer_id as string | null) ?? null,
     printer_name: (row.printer_name as string | null) ?? null,
     mac_address: (row.mac_address as string | null) ?? null,
+    transport: row.transport === "usb" ? "usb" : "bluetooth",
+    usb_vendor_id:
+      row.usb_vendor_id == null ? null : Number(row.usb_vendor_id),
+    usb_product_id:
+      row.usb_product_id == null ? null : Number(row.usb_product_id),
     idempotency_key: row.idempotency_key as string,
     status: row.status as PrintJobStatus,
     attempt_count: (row.attempt_count as number) ?? 0,

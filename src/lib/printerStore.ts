@@ -3,6 +3,7 @@ import { create } from "zustand";
 import { supabase } from "@/lib/supabase";
 
 export type PrinterType = "caisse" | "cuisine";
+export type PrinterTransport = "bluetooth" | "usb";
 
 /** Map legacy plaque/four rows to cuisine until DB migration is applied. */
 export function normalizePrinterType(raw: unknown): PrinterType {
@@ -11,17 +12,43 @@ export function normalizePrinterType(raw: unknown): PrinterType {
   return "cuisine";
 }
 
+export function normalizePrinterTransport(raw: unknown): PrinterTransport {
+  return raw === "usb" ? "usb" : "bluetooth";
+}
+
 export type Printer = {
   id: string;
   name: string;
   type: PrinterType;
+  transport: PrinterTransport;
   mac_address: string | null;
+  usb_vendor_id: number | null;
+  usb_product_id: number | null;
   enabled: boolean;
   /** @deprecated Legacy name-based routing — prefer category_ids */
   categories: string[];
   /** UUID category ids used for kitchen routing; empty = catch-all cuisine */
   category_ids: string[];
 };
+
+/** True when the printer has the endpoint data required by its transport. */
+export function isPrinterEndpointConfigured(printer: Printer): boolean {
+  if (printer.transport === "usb") {
+    return (
+      printer.usb_vendor_id != null &&
+      printer.usb_product_id != null &&
+      Number.isFinite(printer.usb_vendor_id) &&
+      Number.isFinite(printer.usb_product_id)
+    );
+  }
+  return (printer.mac_address ?? "").trim() !== "";
+}
+
+export function formatUsbId(vendorId: number, productId: number): string {
+  const v = vendorId.toString(16).toUpperCase().padStart(4, "0");
+  const p = productId.toString(16).toUpperCase().padStart(4, "0");
+  return `${v}:${p}`;
+}
 
 type PrinterGlobalState = {
   printers: Printer[];
@@ -75,10 +102,18 @@ function parseNameCategories(raw: unknown): string[] {
   return [];
 }
 
+function parseOptionalInt(raw: unknown): number | null {
+  if (raw == null || raw === "") return null;
+  const n = typeof raw === "number" ? raw : Number(raw);
+  return Number.isFinite(n) ? Math.trunc(n) : null;
+}
+
 async function fetchPrintersFromDB(): Promise<Printer[]> {
   const { data, error } = await supabase
     .from("printers")
-    .select("id, name, type, mac_address, enabled, categories, category_ids, created_at")
+    .select(
+      "id, name, type, transport, mac_address, usb_vendor_id, usb_product_id, enabled, categories, category_ids, created_at",
+    )
     .order("created_at", { ascending: true });
 
   if (error) {
@@ -94,10 +129,12 @@ async function fetchPrintersFromDB(): Promise<Printer[]> {
       id: row["id"] as string,
       name: row["name"] as string,
       type: normalizePrinterType(rawType),
+      transport: normalizePrinterTransport(row["transport"]),
       mac_address: (row["mac_address"] as string | null) ?? null,
+      usb_vendor_id: parseOptionalInt(row["usb_vendor_id"]),
+      usb_product_id: parseOptionalInt(row["usb_product_id"]),
       enabled: (row["enabled"] as boolean) ?? true,
       categories: legacyStation ? [] : parseNameCategories(row["categories"]),
-      // Legacy plaque/four become catch-all cuisine until DB migration clears filters
       category_ids: legacyStation ? [] : parseUuidArray(row["category_ids"]),
     };
   });
@@ -145,10 +182,14 @@ export function usePrinterStore() {
   }, [setPrinters, setLoading]);
 
   const addPrinter = async (printer: Omit<Printer, "id">) => {
+    const transport = printer.transport ?? "bluetooth";
     const { error } = await supabase.from("printers").insert({
       name: printer.name,
       type: printer.type,
-      mac_address: printer.mac_address || null,
+      transport,
+      mac_address: transport === "bluetooth" ? printer.mac_address || null : null,
+      usb_vendor_id: transport === "usb" ? printer.usb_vendor_id : null,
+      usb_product_id: transport === "usb" ? printer.usb_product_id : null,
       enabled: printer.enabled,
       categories: printer.categories ?? [],
       category_ids: printer.category_ids ?? [],
@@ -158,17 +199,26 @@ export function usePrinterStore() {
   };
 
   const updatePrinter = async (id: string, printer: Partial<Printer>) => {
-    const { error } = await supabase
-      .from("printers")
-      .update({
-        ...(printer.name !== undefined && { name: printer.name }),
-        ...(printer.type !== undefined && { type: printer.type }),
-        ...(printer.mac_address !== undefined && { mac_address: printer.mac_address }),
-        ...(printer.enabled !== undefined && { enabled: printer.enabled }),
-        ...(printer.categories !== undefined && { categories: printer.categories }),
-        ...(printer.category_ids !== undefined && { category_ids: printer.category_ids }),
-      })
-      .eq("id", id);
+    const patch: Record<string, unknown> = {};
+    if (printer.name !== undefined) patch.name = printer.name;
+    if (printer.type !== undefined) patch.type = printer.type;
+    if (printer.transport !== undefined) patch.transport = printer.transport;
+    if (printer.mac_address !== undefined) patch.mac_address = printer.mac_address;
+    if (printer.usb_vendor_id !== undefined) patch.usb_vendor_id = printer.usb_vendor_id;
+    if (printer.usb_product_id !== undefined) patch.usb_product_id = printer.usb_product_id;
+    if (printer.enabled !== undefined) patch.enabled = printer.enabled;
+    if (printer.categories !== undefined) patch.categories = printer.categories;
+    if (printer.category_ids !== undefined) patch.category_ids = printer.category_ids;
+
+    // Keep endpoint fields consistent with transport when switching.
+    if (printer.transport === "usb") {
+      patch.mac_address = null;
+    } else if (printer.transport === "bluetooth") {
+      patch.usb_vendor_id = null;
+      patch.usb_product_id = null;
+    }
+
+    const { error } = await supabase.from("printers").update(patch).eq("id", id);
     if (error) throw new Error(error.message);
     await reload();
   };

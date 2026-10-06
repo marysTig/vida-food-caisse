@@ -1,10 +1,12 @@
 package com.marystig.vidafoodcaisse
 
+import com.getcapacitor.JSArray
 import com.getcapacitor.JSObject
 import com.getcapacitor.Plugin
 import com.getcapacitor.PluginCall
 import com.getcapacitor.PluginMethod
 import com.getcapacitor.annotation.CapacitorPlugin
+import com.marystig.vidafoodcaisse.print.EscPosUsbPrinter
 import com.marystig.vidafoodcaisse.print.WorkerConfig
 import com.marystig.vidafoodcaisse.print.WorkerRuntime
 
@@ -70,20 +72,58 @@ class HubPrintWorkerPlugin : Plugin() {
   }
 
   @PluginMethod
-  fun adminProbe(call: PluginCall) {
-    val mac = call.getString("macAddress")?.trim().orEmpty()
-    val name = call.getString("printerName")?.trim() ?: "imprimante"
-    if (mac.isEmpty()) {
-      call.reject("macAddress requis")
-      return
+  fun listUsbDevices(call: PluginCall) {
+    try {
+      val devices = WorkerRuntime.loop?.listUsbDevices()
+        ?: EscPosUsbPrinter(context.applicationContext).listDevices()
+      val arr = JSArray()
+      for (d in devices) {
+        val o = JSObject()
+        o.put("vendorId", d.vendorId)
+        o.put("productId", d.productId)
+        o.put("deviceName", d.deviceName)
+        o.put("productName", d.productName)
+        o.put("hasPermission", d.hasPermission)
+        arr.put(o)
+      }
+      val ret = JSObject()
+      ret.put("devices", arr)
+      call.resolve(ret)
+    } catch (e: Exception) {
+      call.reject("listUsbDevices failed: ${e.message}", e)
     }
+  }
+
+  @PluginMethod
+  fun adminProbe(call: PluginCall) {
+    val transport = call.getString("transport")?.trim()?.lowercase() ?: "bluetooth"
+    val name = call.getString("printerName")?.trim() ?: "imprimante"
     val loop = WorkerRuntime.loop
     if (loop == null || !loop.isRunning()) {
       call.reject("Worker non démarré — lancez le hub natif d'abord")
       return
     }
     try {
-      val (ok, detail) = loop.adminProbe(name, mac)
+      val (ok, detail) = if (transport == "usb") {
+        val vid = call.getInt("vendorId")
+          ?: run {
+            call.reject("vendorId requis pour USB")
+            return
+          }
+        val pid = call.getInt("productId")
+          ?: run {
+            call.reject("productId requis pour USB")
+            return
+          }
+        loop.adminUsbProbe(name, vid, pid)
+      } else {
+        val mac = call.getString("macAddress")?.trim().orEmpty()
+        if (mac.isEmpty()) {
+          call.reject("macAddress requis")
+          return
+        }
+        loop.adminProbe(name, mac)
+      }
       val ret = JSObject()
       ret.put("ok", ok)
       ret.put("detail", detail)
@@ -95,11 +135,11 @@ class HubPrintWorkerPlugin : Plugin() {
 
   @PluginMethod
   fun adminTestPrint(call: PluginCall) {
-    val mac = call.getString("macAddress")?.trim().orEmpty()
+    val transport = call.getString("transport")?.trim()?.lowercase() ?: "bluetooth"
     val name = call.getString("printerName")?.trim() ?: "imprimante"
     val b64 = call.getString("escposBase64")?.trim().orEmpty()
-    if (mac.isEmpty() || b64.isEmpty()) {
-      call.reject("macAddress et escposBase64 requis")
+    if (b64.isEmpty()) {
+      call.reject("escposBase64 requis")
       return
     }
     val loop = WorkerRuntime.loop
@@ -108,7 +148,26 @@ class HubPrintWorkerPlugin : Plugin() {
       return
     }
     try {
-      val (ok, detail) = loop.adminTestPrint(name, mac, b64)
+      val (ok, detail) = if (transport == "usb") {
+        val vid = call.getInt("vendorId")
+          ?: run {
+            call.reject("vendorId requis pour USB")
+            return
+          }
+        val pid = call.getInt("productId")
+          ?: run {
+            call.reject("productId requis pour USB")
+            return
+          }
+        loop.adminUsbTestPrint(name, vid, pid, b64)
+      } else {
+        val mac = call.getString("macAddress")?.trim().orEmpty()
+        if (mac.isEmpty()) {
+          call.reject("macAddress et escposBase64 requis")
+          return
+        }
+        loop.adminTestPrint(name, mac, b64)
+      }
       if (!ok) {
         call.reject(detail)
         return

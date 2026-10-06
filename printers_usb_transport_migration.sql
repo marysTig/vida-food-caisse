@@ -1,6 +1,27 @@
--- Atomic batch claim for native HubPrintWorker.
--- Parallel USB receipt + BT kitchen: no receipt-hold on kitchen claims.
+-- USB transport for Caisse (OTG) alongside Bluetooth kitchen.
+-- Apply in Supabase SQL Editor if MCP migration was not used.
 
+ALTER TABLE public.printers
+  ADD COLUMN IF NOT EXISTS transport text NOT NULL DEFAULT 'bluetooth',
+  ADD COLUMN IF NOT EXISTS usb_vendor_id integer,
+  ADD COLUMN IF NOT EXISTS usb_product_id integer;
+
+ALTER TABLE public.printers DROP CONSTRAINT IF EXISTS printers_transport_check;
+ALTER TABLE public.printers
+  ADD CONSTRAINT printers_transport_check
+  CHECK (transport = ANY (ARRAY['bluetooth'::text, 'usb'::text]));
+
+ALTER TABLE public.print_jobs
+  ADD COLUMN IF NOT EXISTS transport text NOT NULL DEFAULT 'bluetooth',
+  ADD COLUMN IF NOT EXISTS usb_vendor_id integer,
+  ADD COLUMN IF NOT EXISTS usb_product_id integer;
+
+ALTER TABLE public.print_jobs DROP CONSTRAINT IF EXISTS print_jobs_transport_check;
+ALTER TABLE public.print_jobs
+  ADD CONSTRAINT print_jobs_transport_check
+  CHECK (transport = ANY (ARRAY['bluetooth'::text, 'usb'::text]));
+
+-- Parallel USB receipt + BT kitchen: do not block kitchen claims on pending receipts.
 CREATE OR REPLACE FUNCTION public.claim_print_jobs(
   p_device_id text,
   p_limit int DEFAULT 8
