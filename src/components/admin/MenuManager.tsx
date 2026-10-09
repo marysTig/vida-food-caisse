@@ -77,7 +77,10 @@ function useDragReorder<T extends { id: string }>(
 
 export function MenuManager() {
   const isMobile = useIsMobile();
-  const isTouchUi = isMobile || usePrefersCoarsePointer();
+  // Both hooks must run every render — `isMobile || usePrefersCoarsePointer()`
+  // skipped the second hook once isMobile flipped true and crashed React.
+  const prefersCoarsePointer = usePrefersCoarsePointer();
+  const isTouchUi = isMobile || prefersCoarsePointer;
   const [view, setView] = useState<MenuView>("home");
   const {
     products,
