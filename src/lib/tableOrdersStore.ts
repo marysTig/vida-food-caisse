@@ -100,11 +100,18 @@ function scheduleUpsert(tableId: string, items: CartItem[], note: string, global
 
 async function deleteFromDB(tableId: string) {
   cancelScheduledUpsert(tableId);
-  const { error } = await supabase
-    .from("table_orders")
-    .delete()
-    .eq("table_id", tableId);
-  if (error) console.error("[table_orders] delete error:", error.message);
+  // A failed delete left the finished order attached to the table (leftover
+  // items for the next customer). Retry through short network blips; the DB
+  // trigger tables_clear_order_on_free is the final guarantee.
+  for (let attempt = 1; attempt <= 5; attempt++) {
+    const { error } = await supabase
+      .from("table_orders")
+      .delete()
+      .eq("table_id", tableId);
+    if (!error) return;
+    console.error(`[table_orders] delete error (attempt ${attempt}/5):`, error.message);
+    if (attempt < 5) await new Promise((r) => setTimeout(r, attempt * 1000));
+  }
 }
 
 // ── Zustand store ─────────────────────────────────────────────────────────────
