@@ -884,6 +884,48 @@ export async function retryAllNeedsManual(): Promise<number> {
   return data?.length ?? 0;
 }
 
+/**
+ * User gave up on failed tickets: needs_manual → cancelled (only the [jobIds]
+ * shown to them, so a ticket failing meanwhile is not cancelled unseen).
+ * Kitchen lines are marked printed so the next "Valider" does not print them
+ * again as a delta.
+ */
+export async function cancelNeedsManualJobs(jobIds: string[]): Promise<number> {
+  if (jobIds.length === 0) return 0;
+  const now = new Date().toISOString();
+  const { data, error } = await supabase
+    .from("print_jobs")
+    .update({
+      status: "cancelled",
+      claimed_by_device_id: null,
+      error: "Impression annulée par l'utilisateur",
+      updated_at: now,
+    })
+    .eq("status", "needs_manual")
+    .in("id", jobIds)
+    .select("id, job_type, table_id, payload");
+  if (error) throw new Error(error.message);
+
+  for (const row of data ?? []) {
+    const r = row as {
+      job_type: PrintJobType;
+      table_id: string | null;
+      payload: PrintJobPayload | null;
+    };
+    const fps = r.payload?.fingerprints;
+    const tableId = r.table_id ?? r.payload?.tableId;
+    if (r.job_type === "kitchen" && fps && tableId && UUID_RE.test(tableId)) {
+      const { error: markErr } = await supabase.rpc("mark_kitchen_items_printed", {
+        p_table_id: tableId,
+        p_fingerprints: fps,
+        p_printed_at: now,
+      });
+      if (markErr) console.warn("[print_jobs] cancel: mark printed failed", markErr.message);
+    }
+  }
+  return data?.length ?? 0;
+}
+
 export async function fetchNeedsManualJobs(): Promise<PrintJob[]> {
   const { data, error } = await supabase
     .from("print_jobs")
