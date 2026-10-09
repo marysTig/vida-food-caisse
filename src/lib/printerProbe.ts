@@ -186,8 +186,9 @@ export async function probeAllPrinters(options?: {
     }
     console.log("[BT PROBE] start", { count: printers.length });
     for (const p of printers) {
-      // Re-check between printers — production may have started
-      if (await hasActivePrintJobs() || isNativePrintWorkerActive()) {
+      // Re-check between printers — production may have started. Native probes
+      // run on the printer's own lane and report busy themselves.
+      if (!isNativePrintWorkerActive() && (await hasActivePrintJobs())) {
         console.log("[BT PROBE] pause mid-run — queue busy / native worker");
         const remaining = printers.slice(printers.indexOf(p));
         markPrintersBusy(remaining);

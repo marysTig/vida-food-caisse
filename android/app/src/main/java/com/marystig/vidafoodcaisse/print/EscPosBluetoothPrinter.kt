@@ -7,8 +7,12 @@ import android.bluetooth.BluetoothSocket
 import android.util.Base64
 import android.util.Log
 import java.io.IOException
+import java.io.InputStream
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 
 /**
@@ -18,6 +22,12 @@ import java.util.concurrent.atomic.AtomicReference
  */
 class EscPosBluetoothPrinter(
   private val appContext: android.content.Context? = null,
+  /**
+   * Parallel-lane mode: keep the RFCOMM session open indefinitely for printers
+   * that answer DLE EOT (liveness is pinged by the lane). Printers without status
+   * replies keep the 20s keepalive — a dead link cannot be detected on them.
+   */
+  private val persistent: Boolean = false,
 ) {
   companion object {
     private const val TAG = "EscPosBt"
@@ -25,7 +35,29 @@ class EscPosBluetoothPrinter(
     private val SPP_UUID: UUID =
       UUID.fromString("00001101-0000-1000-8000-00805F9B34FB")
 
-    const val OP_TIMEOUT_MS = 15_000L
+    /**
+     * Write deadline: base + 1ms per 4 bytes (≈4 KB/s worst-case SPP), capped.
+     * On expiry the socket is closed, which unblocks a stuck write().
+     */
+    const val WRITE_TIMEOUT_BASE_MS = 8_000L
+    const val WRITE_TIMEOUT_MAX_MS = 20_000L
+    /** DLE EOT 1 (real-time printer status) — reply proves all prior bytes reached the printer. */
+    private val DLE_EOT_PRINTER = byteArrayOf(0x10, 0x04, 0x01)
+    const val STATUS_BASE_MS = 1_200L
+    const val STATUS_MAX_MS = 4_000L
+    const val STATUS_POLL_MS = 20L
+    /** Liveness ping before reusing a kept-alive socket (status-capable printers only). */
+    const val LIVENESS_TIMEOUT_MS = 800L
+    /** Consecutive silent replies before a printer is treated as not status-capable. */
+    const val STATUS_LEARN_ATTEMPTS = 3
+    /**
+     * Fallback pre-close drain for printers without status replies:
+     * base + 1ms per 16 bytes, capped. Closing RFCOMM right after write() can drop
+     * bytes still queued in the BT stack (truncated / missing kitchen tickets).
+     */
+    const val DRAIN_BASE_MS = 150L
+    const val DRAIN_BYTES_PER_MS = 16
+    const val DRAIN_MAX_MS = 2_000L
     /** Primary path for kitchen ESC/POS. */
     const val SPP_ATTEMPT_MS = 4_000L
     /** Fallback only — keep short so a dead channel-1 cannot burn the radio. */
@@ -39,7 +71,6 @@ class EscPosBluetoothPrinter(
      */
     const val MAC_SWITCH_SETTLE_MS = 0L
     const val HARD_SETTLE_MS = 700L
-    const val PRE_DISCONNECT_DRAIN_MS = 100L
     /**
      * Inter-kitchen gap on one radio. Was 400; second ticket waited gap+connect
      * (~1.7s) after first. Keep a tiny ACL tear-down window only.
@@ -51,16 +82,26 @@ class EscPosBluetoothPrinter(
 
   private enum class ConnectMode { CHANNEL1, SPP }
 
+  /** Learned per MAC, in memory only (relearned per process / printer swap). */
+  private enum class StatusSupport { YES, NO }
+
   data class SendTiming(
     val gapMs: Long,
     val settleMs: Long,
     val connectMs: Long,
     val writeMs: Long,
     val reused: Boolean,
+    /** "status" = printer acknowledged via DLE EOT; "drain" = timed fallback. */
+    val confirm: String,
   )
 
   private val socketRef = AtomicReference<BluetoothSocket?>(null)
   private val preferredMode = ConcurrentHashMap<String, ConnectMode>()
+  private val statusSupport = ConcurrentHashMap<String, StatusSupport>()
+  private val statusSilentCount = ConcurrentHashMap<String, Int>()
+  private val ioWatchdog = Executors.newSingleThreadScheduledExecutor { r ->
+    Thread(r, "EscPosBtWatchdog").apply { isDaemon = true }
+  }
   @Volatile private var liveMac: String? = null
   @Volatile private var lastSuccessMac: String? = null
   @Volatile private var liveOpenedAt = 0L
@@ -82,6 +123,12 @@ class EscPosBluetoothPrinter(
     closeLiveSocket()
   }
 
+  /** Lane teardown — closes the session and the IO watchdog thread. */
+  fun shutdown(reason: String) {
+    forceClose(reason)
+    ioWatchdog.shutdownNow()
+  }
+
   fun liveMacOrNull(): String? = liveMac
 
   fun lastSuccessMacOrNull(): String? = lastSuccessMac
@@ -93,8 +140,24 @@ class EscPosBluetoothPrinter(
     radioNeedsSettle = false
   }
 
+  private fun holdsPersistently(mac: String): Boolean =
+    persistent && statusSupport[mac] == StatusSupport.YES
+
+  fun isStatusCapable(macAddress: String): Boolean =
+    statusSupport[normalizeMac(macAddress)] == StatusSupport.YES
+
+  fun isStatusUnsupported(macAddress: String): Boolean =
+    statusSupport[normalizeMac(macAddress)] == StatusSupport.NO
+
+  fun hasLiveSession(): Boolean = liveMac != null && socketRef.get()?.isConnected == true
+
+  /** Millis since the live session last proved itself (connect, write or ping). */
+  fun liveIdleMs(): Long =
+    if (liveOpenedAt == 0L) Long.MAX_VALUE else System.currentTimeMillis() - liveOpenedAt
+
   fun closeIfKeepaliveExpired() {
     val mac = liveMac ?: return
+    if (holdsPersistently(mac)) return
     val age = System.currentTimeMillis() - liveOpenedAt
     if (age >= KEEPALIVE_MS) {
       Log.i(TAG, "keepalive expired · $mac · ${age}ms")
@@ -159,13 +222,25 @@ class EscPosBluetoothPrinter(
       existing != null &&
         existing.isConnected &&
         liveMac == mac &&
-        (System.currentTimeMillis() - liveOpenedAt) < KEEPALIVE_MS &&
+        (holdsPersistently(mac) || (System.currentTimeMillis() - liveOpenedAt) < KEEPALIVE_MS) &&
         !radioNeedsSettle
 
-    val socket: BluetoothSocket
+    var reusable: BluetoothSocket? = null
     if (canReuse) {
+      // isConnected is local-only — a printer powered off during keepalive still
+      // looks connected and write() lands in the local buffer (false "done").
+      if (isLinkAlive(existing!!, mac, printerName)) {
+        reusable = existing
+      } else {
+        Log.w(TAG, "REUSE rejected · $printerName · no status reply — reconnect")
+        closeLiveSocket()
+      }
+    }
+
+    val socket: BluetoothSocket
+    if (reusable != null) {
       reused = true
-      socket = existing!!
+      socket = reusable
       Log.i(TAG, "REUSE · $printerName · $mac")
     } else {
       val hadLive = existing != null || liveMac != null
@@ -207,13 +282,16 @@ class EscPosBluetoothPrinter(
 
     val tWrite = System.currentTimeMillis()
     midWrite = true
-    try {
-      val out = socket.outputStream
-      out.write(raw)
-      out.flush()
-      // Skip drain when handing off — next MAC connect needs the radio free now.
-      if (!isReceipt && !releaseForHandoff) {
-        Thread.sleep(PRE_DISCONNECT_DRAIN_MS)
+    val confirm = try {
+      val writeTimeout =
+        (WRITE_TIMEOUT_BASE_MS + raw.size / 4).coerceAtMost(WRITE_TIMEOUT_MAX_MS)
+      // Deadline covers write + delivery confirmation (both can block on a dead link).
+      withIoDeadline(socket, writeTimeout + STATUS_MAX_MS, "write:$printerName") {
+        val out = socket.outputStream
+        out.write(raw)
+        out.flush()
+        // Never ack/close before the printer has the bytes — also on handoff.
+        confirmDelivery(socket, mac, printerName, raw.size)
       }
     } catch (e: Exception) {
       midWrite = false
@@ -236,19 +314,208 @@ class EscPosBluetoothPrinter(
       radioNeedsSettle = false
     }
 
-    // #region agent log
-    Log.i(
-      "PrinterLinkDebug",
-      """{"sessionId":"5eee2c","hypothesisId":"E","runId":"post-fix-handoff","location":"EscPosBt.sendEscPos","message":"send-complete","data":{"printer":"$printerName","gapMs":$gapMs,"settleMs":$settleMs,"connectMs":$connectMs,"writeMs":$writeMs,"reused":$reused,"releaseForHandoff":$releaseForHandoff},"timestamp":${System.currentTimeMillis()}}""",
-    )
-    // #endregion
     Log.i(
       TAG,
       "SEND COMPLETE · $printerName · bytes=${raw.size} · reuse=$reused · " +
-        "gap_ms=$gapMs settle_ms=$settleMs connect_ms=$connectMs write_ms=$writeMs" +
+        "gap_ms=$gapMs settle_ms=$settleMs connect_ms=$connectMs write_ms=$writeMs " +
+        "confirm=$confirm" +
         if (releaseForHandoff) " · handoff" else "",
     )
-    return SendTiming(gapMs, settleMs, connectMs, writeMs, reused)
+    return SendTiming(gapMs, settleMs, connectMs, writeMs, reused, confirm)
+  }
+
+  /**
+   * Runs [block] with a watchdog that closes [socket] after [timeoutMs].
+   * Closing is the only way to unblock a stuck RFCOMM write()/read().
+   */
+  private fun <T> withIoDeadline(
+    socket: BluetoothSocket,
+    timeoutMs: Long,
+    label: String,
+    block: () -> T,
+  ): T {
+    val fired = AtomicBoolean(false)
+    val watchdog = ioWatchdog.schedule({
+      fired.set(true)
+      Log.e(TAG, "IO deadline ${timeoutMs}ms exceeded · $label — closing socket")
+      try {
+        socket.close()
+      } catch (_: Exception) {
+        /* ignore */
+      }
+    }, timeoutMs, TimeUnit.MILLISECONDS)
+    try {
+      val result = block()
+      if (fired.get()) throw IOException("Délai d'écriture dépassé (${timeoutMs / 1000}s)")
+      return result
+    } catch (e: IOException) {
+      if (fired.get()) {
+        throw IOException("Délai d'écriture dépassé (${timeoutMs / 1000}s) — imprimante bloquée", e)
+      }
+      throw e
+    } finally {
+      watchdog.cancel(false)
+    }
+  }
+
+  /**
+   * Ensures the printer received every byte before the caller acks or closes.
+   * Status-capable printers answer DLE EOT 1 only after the preceding bytes
+   * arrived (RFCOMM is ordered). Others get a size-based drain.
+   * @return "status" or "drain"
+   */
+  private fun confirmDelivery(
+    socket: BluetoothSocket,
+    mac: String,
+    printerName: String,
+    bytes: Int,
+  ): String {
+    val support = statusSupport[mac]
+    if (support != StatusSupport.NO) {
+      val timeout = (STATUS_BASE_MS + bytes / 10).coerceAtMost(STATUS_MAX_MS)
+      val replied = requestStatus(socket, timeout)
+      if (!replied && support == StatusSupport.YES) {
+        // Printer normally answers — silence means the link died mid-ticket.
+        throw IOException("Imprimante sans réponse après envoi — ticket non confirmé")
+      }
+      recordStatusReply(mac, printerName, replied)
+      if (replied) return "status"
+    }
+    val drain = (DRAIN_BASE_MS + bytes / DRAIN_BYTES_PER_MS).coerceAtMost(DRAIN_MAX_MS)
+    Thread.sleep(drain)
+    return "drain"
+  }
+
+  /** Learns status capability: one reply → YES; N consecutive silences → NO. */
+  private fun recordStatusReply(mac: String, printerName: String, replied: Boolean) {
+    if (replied) {
+      if (statusSupport[mac] == null) Log.i(TAG, "status-capable · $printerName")
+      statusSupport[mac] = StatusSupport.YES
+      statusSilentCount.remove(mac)
+      return
+    }
+    if (statusSupport[mac] != null) return
+    val silent = (statusSilentCount[mac] ?: 0) + 1
+    statusSilentCount[mac] = silent
+    if (silent >= STATUS_LEARN_ATTEMPTS) {
+      statusSupport[mac] = StatusSupport.NO
+      Log.i(TAG, "no status replies · $printerName — drain-only confirmation")
+    }
+  }
+
+  /**
+   * Lane warm-up / reconnect: make sure a live, verified session to [macAddress]
+   * exists (reuse + ping when possible, else connect and learn status support).
+   * Throws IOException when the printer cannot be reached.
+   */
+  @SuppressLint("MissingPermission")
+  fun ensureConnected(printerName: String, macAddress: String) {
+    val mac = normalizeMac(macAddress)
+    val adapter = BluetoothAdapter.getDefaultAdapter()
+      ?: throw IOException("Bluetooth non disponible")
+    if (!adapter.isEnabled) throw IOException("Bluetooth désactivé")
+
+    val existing = socketRef.get()
+    if (existing != null && existing.isConnected && liveMac == mac && !radioNeedsSettle) {
+      if (isLinkAlive(existing, mac, printerName)) {
+        liveOpenedAt = System.currentTimeMillis()
+        PrinterLinkStatusHub.onBtSuccess(mac)
+        return
+      }
+      Log.w(TAG, "ensureConnected · $printerName · stale session — reconnect")
+    }
+    if (existing != null || liveMac != null) {
+      PrinterLinkStatusHub.markIntentionalRadioSwitch()
+      closeLiveSocket()
+    }
+    if (radioNeedsSettle) hardSettle("ensure:$printerName")
+
+    val device = try {
+      resolveBondedDevice(adapter, mac)
+    } catch (e: IllegalArgumentException) {
+      throw IOException("MAC invalide: $mac", e)
+    }
+    val t0 = System.currentTimeMillis()
+    val socket = connectEscPos(device, printerName, mac, probe = false)
+    socketRef.set(socket)
+    liveMac = mac
+    liveOpenedAt = System.currentTimeMillis()
+    PrinterLinkStatusHub.onBtSessionOpened(mac)
+    if (statusSupport[mac] == null) {
+      try {
+        val replied = withIoDeadline(socket, STATUS_BASE_MS + 1_000L, "learn:$printerName") {
+          requestStatus(socket, STATUS_BASE_MS)
+        }
+        recordStatusReply(mac, printerName, replied)
+      } catch (e: IOException) {
+        forceClose("learn-fail:$printerName")
+        throw e
+      }
+    }
+    lastSuccessMac = mac
+    radioNeedsSettle = false
+    PrinterLinkStatusHub.onBtSuccess(mac)
+    Log.i(TAG, "SESSION READY · $printerName · connect_ms=${System.currentTimeMillis() - t0}")
+  }
+
+  /**
+   * Idle liveness ping of the live session.
+   * @return null when not applicable (no session / printer without status replies),
+   * true when alive, false when dead (session is closed).
+   */
+  fun pingLive(printerName: String): Boolean? {
+    val socket = socketRef.get() ?: return null
+    val mac = liveMac ?: return null
+    if (statusSupport[mac] != StatusSupport.YES) return null
+    if (isLinkAlive(socket, mac, printerName)) {
+      liveOpenedAt = System.currentTimeMillis()
+      PrinterLinkStatusHub.onBtSuccess(mac)
+      return true
+    }
+    Log.w(TAG, "ping failed · $printerName — session closed")
+    forceClose("ping-fail:$printerName")
+    return false
+  }
+
+  /** Liveness check before reuse; only meaningful for status-capable printers. */
+  private fun isLinkAlive(socket: BluetoothSocket, mac: String, printerName: String): Boolean {
+    if (statusSupport[mac] != StatusSupport.YES) return true
+    return try {
+      withIoDeadline(socket, LIVENESS_TIMEOUT_MS + 1_000L, "ping:$printerName") {
+        requestStatus(socket, LIVENESS_TIMEOUT_MS)
+      }
+    } catch (e: IOException) {
+      false
+    }
+  }
+
+  /** Sends DLE EOT 1 and polls for a valid status byte (0xx1xx10b). */
+  private fun requestStatus(socket: BluetoothSocket, timeoutMs: Long): Boolean {
+    val input = socket.inputStream
+    discardPending(input)
+    val out = socket.outputStream
+    out.write(DLE_EOT_PRINTER)
+    out.flush()
+    val deadline = System.currentTimeMillis() + timeoutMs
+    while (System.currentTimeMillis() < deadline) {
+      if (input.available() > 0) {
+        val b = input.read()
+        if (b < 0) throw IOException("Flux Bluetooth fermé")
+        if ((b and 0x93) == 0x12) return true
+        continue
+      }
+      Thread.sleep(STATUS_POLL_MS)
+    }
+    return false
+  }
+
+  /** Drop stale bytes (e.g. automatic status) so they are not read as a reply. */
+  private fun discardPending(input: InputStream) {
+    var n = input.available()
+    while (n > 0) {
+      input.skip(n.toLong())
+      n = input.available()
+    }
   }
 
   /** Reachability probe — soft when radio is clean to avoid stealing the other kitchen LED / traffic. */
@@ -316,13 +583,6 @@ class EscPosBluetoothPrinter(
     val first = preferredMode[mac] ?: ConnectMode.SPP
     val second = if (first == ConnectMode.SPP) ConnectMode.CHANNEL1 else ConnectMode.SPP
 
-    // #region agent log
-    Log.i(
-      "PrinterLinkDebug",
-      """{"sessionId":"5eee2c","hypothesisId":"A","runId":"post-fix","location":"EscPosBt.connectEscPos","message":"connect-order","data":{"printer":"$printerName","mac":"$mac","first":"${first.name}","second":"${second.name}","probe":$probe},"timestamp":${System.currentTimeMillis()}}""",
-    )
-    // #endregion
-
     try {
       val s = openMode(device, first, if (first == ConnectMode.SPP) sppMs else ch1Ms)
       preferredMode[mac] = first
@@ -331,12 +591,6 @@ class EscPosBluetoothPrinter(
       return s
     } catch (firstErr: IOException) {
       Log.w(TAG, "${first.name} failed · $printerName — settle then ${second.name}", firstErr)
-      // #region agent log
-      Log.i(
-        "PrinterLinkDebug",
-        """{"sessionId":"5eee2c","hypothesisId":"A","runId":"post-fix","location":"EscPosBt.connectEscPos","message":"first-mode-failed","data":{"printer":"$printerName","mode":"${first.name}","err":"${firstErr.message?.replace("\"","'")}","next":"${second.name}"},"timestamp":${System.currentTimeMillis()}}""",
-      )
-      // #endregion
       try {
         socketRef.getAndSet(null)?.close()
       } catch (_: Exception) {

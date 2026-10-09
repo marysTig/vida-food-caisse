@@ -15,9 +15,15 @@ data class NativePrintJob(
   val attemptCount: Int,
   val payload: JSONObject,
   val tableId: String?,
+  /** print_jobs.table_id column (uuid or null) — reused when rerouting. */
+  val rowTableId: String? = null,
 ) {
   val escposBase64: String?
     get() = payload.optString("escposBase64", "").takeIf { it.isNotBlank() }
+
+  /** Already a reroute/consol copy — never reroute again (no ping-pong). */
+  val isConsol: Boolean
+    get() = payload.optString("consolOfJobId", "").isNotBlank()
 
   val fingerprints: JSONObject?
     get() = payload.optJSONObject("fingerprints")
@@ -53,6 +59,8 @@ data class NativePrintJob(
         payload = payload,
         tableId = payload.optString("tableId", null)?.takeIf { it.isNotBlank() }
           ?: row.optString("table_id", null)?.takeIf { it.isNotBlank() },
+        rowTableId = if (row.isNull("table_id")) null
+        else row.optString("table_id", "").takeIf { it.isNotBlank() },
       )
     }
 
@@ -63,6 +71,42 @@ data class NativePrintJob(
       } catch (_: Exception) {
         null
       }
+    }
+  }
+}
+
+/** Kitchen Bluetooth printer row (reroute targets + eager lanes). */
+data class KitchenPrinter(
+  val id: String,
+  val name: String,
+  val macAddress: String,
+)
+
+/** print_settings singleton as seen by the native hub. */
+data class HubSettings(
+  val primaryDeviceId: String,
+  /** "parallel" (one lane per kitchen printer) or "serialized" (legacy single lane). */
+  val laneMode: String,
+  val autoReroute: Boolean,
+) {
+  companion object {
+    const val MODE_PARALLEL = "parallel"
+    const val MODE_SERIALIZED = "serialized"
+
+    /** Missing columns (migration not applied yet) fall back to parallel + reroute. */
+    fun fromJson(row: JSONObject): HubSettings {
+      val mode = row.optString("bt_lane_mode", MODE_PARALLEL).lowercase()
+      val reroute =
+        if (row.has("kitchen_auto_reroute") && !row.isNull("kitchen_auto_reroute")) {
+          row.optBoolean("kitchen_auto_reroute", true)
+        } else {
+          true
+        }
+      return HubSettings(
+        primaryDeviceId = row.optString("primary_device_id", ""),
+        laneMode = if (mode == MODE_SERIALIZED) MODE_SERIALIZED else MODE_PARALLEL,
+        autoReroute = reroute,
+      )
     }
   }
 }

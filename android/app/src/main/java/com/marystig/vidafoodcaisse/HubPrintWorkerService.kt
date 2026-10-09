@@ -171,10 +171,16 @@ class HubPrintWorkerService : Service() {
     val deviceId = WorkerConfig.deviceId(this)!!
 
     acquireWakeLock()
-    val btPrinter = EscPosBluetoothPrinter(applicationContext)
     val usbPrinter = EscPosUsbPrinter(applicationContext)
     val repo = PrintJobRepository(url, key, deviceId)
-    val worker = PrintWorkerLoop(repo, btPrinter, usbPrinter) { running, depth, err ->
+    val appCtx = applicationContext
+    val worker = PrintWorkerLoop(
+      repo = repo,
+      btPrinterFactory = { persistent -> EscPosBluetoothPrinter(appCtx, persistent) },
+      usbPrinter = usbPrinter,
+      initialLaneMode = WorkerConfig.laneMode(appCtx),
+      persistLaneMode = { mode -> WorkerConfig.setLaneMode(appCtx, mode) },
+    ) { running, depth, err ->
       WorkerRuntime.running = running
       WorkerRuntime.queueDepth = depth
       WorkerRuntime.lastError = err
@@ -246,7 +252,21 @@ class HubPrintWorkerService : Service() {
     getSystemService(NotificationManager::class.java)?.createNotificationChannel(channel)
   }
 
+  @Volatile private var lastNotifiedDepth = -1
+  @Volatile private var lastNotifiedError: String? = null
+  @Volatile private var lastNotifiedAt = 0L
+
+  /**
+   * onStatus fires from several threads up to ~20×/s; Android rate-limits
+   * notification updates, so only push changes, at most every 500ms.
+   */
   private fun updateNotification(depth: Int, error: String?) {
+    val now = System.currentTimeMillis()
+    if (depth == lastNotifiedDepth && error == lastNotifiedError) return
+    if (now - lastNotifiedAt < 500L) return
+    lastNotifiedDepth = depth
+    lastNotifiedError = error
+    lastNotifiedAt = now
     val nm = getSystemService(NotificationManager::class.java) ?: return
     nm.notify(NOTIFICATION_ID, buildNotification(depth, error))
   }

@@ -216,6 +216,60 @@ export async function buildIdempotencyKey(
   return sha256Hex(`${tableId}|${parts.join(";")}`);
 }
 
+/** How long a finished kitchen job still guards its lines (print-mark lag). */
+const IN_FLIGHT_DONE_WINDOW_MS = 2 * 60 * 1000;
+
+type InFlightLine = { fingerprint: string; status: string; printedAt: string | null };
+
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+/** item id → fingerprints on pending/printing (or just-done) kitchen jobs. */
+async function fetchInFlightKitchenLines(
+  tableId: string,
+): Promise<Map<string, InFlightLine[]>> {
+  const byItem = new Map<string, InFlightLine[]>();
+  if (!UUID_RE.test(tableId)) return byItem;
+  const since = new Date(Date.now() - IN_FLIGHT_DONE_WINDOW_MS).toISOString();
+  const { data, error } = await supabase
+    .from("print_jobs")
+    .select("status, printed_at, fingerprints:payload->fingerprints")
+    .eq("table_id", tableId)
+    .eq("job_type", "kitchen")
+    .or(`status.in.(pending,printing),and(status.eq.done,updated_at.gte."${since}")`);
+  if (error) {
+    console.warn("[KITCHEN ENQUEUE] in-flight lookup failed", error.message);
+    return byItem;
+  }
+  for (const row of data ?? []) {
+    const r = row as {
+      status: string;
+      printed_at: string | null;
+      fingerprints: Record<string, string> | null;
+    };
+    for (const [itemId, fingerprint] of Object.entries(r.fingerprints ?? {})) {
+      const list = byItem.get(itemId) ?? [];
+      list.push({ fingerprint, status: r.status, printedAt: r.printed_at });
+      byItem.set(itemId, list);
+    }
+  }
+  return byItem;
+}
+
+function isLineInFlight(item: CartItem, inFlight: Map<string, InFlightLine[]>): boolean {
+  const entries = inFlight.get(item.id);
+  if (!entries) return false;
+  const fp = computeKitchenFingerprint(item);
+  return entries.some((e) => {
+    if (e.fingerprint !== fp) return false;
+    if (e.status !== "done") return true;
+    // A done job only guards until its mark is visible on this line — an older
+    // print superseded by a newer one must not block a legitimate reprint.
+    const markedAt = item.kitchenPrintedAt ?? null;
+    return !markedAt || !e.printedAt || Date.parse(e.printedAt) > Date.parse(markedAt);
+  });
+}
+
 export type EnqueueKitchenParams = {
   tableId: string;
   orderLabel: string | number;
@@ -244,14 +298,23 @@ export async function enqueueKitchenStations(
   const printers = params.printers ?? getPrintersFromStore();
   const kitchenPrinters = enabledKitchenPrinters(printers);
 
-  const delta = getKitchenDelta(items);
+  const rawDelta = getKitchenDelta(items);
+  if (rawDelta.length === 0) {
+    return { status: "noop", reason: "empty_delta" };
+  }
+  // Lines already on a queued / just-printed ticket whose print mark has not
+  // reached this tablet yet would otherwise print again (new idempotency key
+  // as soon as the delta gains another line).
+  const inFlight = await fetchInFlightKitchenLines(params.tableId);
+  const delta = rawDelta.filter((item) => !isLineInFlight(item, inFlight));
   console.log("[KITCHEN ENQUEUE] delta", {
     items: items.length,
     delta: delta.length,
+    inFlightSkipped: rawDelta.length - delta.length,
     kitchenPrinters: kitchenPrinters.length,
   });
   if (delta.length === 0) {
-    return { status: "noop", reason: "empty_delta" };
+    return { status: "noop", reason: "duplicate" };
   }
 
   if (kitchenPrinters.length === 0) {
@@ -369,27 +432,6 @@ export async function enqueueKitchenStations(
     "[KITCHEN ENQUEUE] insert parallel",
     pendingRows.map((r) => r.printerName),
   );
-  // #region agent log
-  fetch("http://127.0.0.1:7680/ingest/b490126b-dfa2-4a19-9733-3902cacf3768", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "X-Debug-Session-Id": "5eee2c",
-    },
-    body: JSON.stringify({
-      sessionId: "5eee2c",
-      hypothesisId: "F",
-      runId: "post-fix-handoff",
-      location: "kitchenPrintQueue.ts:enqueue",
-      message: "parallel-insert",
-      data: {
-        printers: pendingRows.map((r) => r.printerName),
-        n: pendingRows.length,
-      },
-      timestamp: Date.now(),
-    }),
-  }).catch(() => {});
-  // #endregion
 
   const insertResults = await Promise.all(
     pendingRows.map(async (entry) => {
@@ -747,6 +789,11 @@ export async function reclaimStalePrintingJobs(
   return claimed;
 }
 
+/**
+ * Guarded to printing/pending (mirrors native PrintJobRepository.markDone):
+ * a printed ticket must close even if reset to pending, but never reopen
+ * done/needs_manual/cancelled rows.
+ */
 export async function markPrintJobDone(jobId: string): Promise<void> {
   const now = new Date().toISOString();
   await supabase
@@ -757,7 +804,8 @@ export async function markPrintJobDone(jobId: string): Promise<void> {
       updated_at: now,
       error: null,
     })
-    .eq("id", jobId);
+    .eq("id", jobId)
+    .in("status", ["printing", "pending"]);
 }
 
 export async function schedulePrintJobRetry(
@@ -767,6 +815,8 @@ export async function schedulePrintJobRetry(
   backoffMs: number = RETRY_BACKOFF_MS,
 ): Promise<"pending" | "needs_manual"> {
   const now = new Date();
+  const deviceId = getLocalPrintDeviceId();
+  // Only rows still printing for this device — never clobber another claimant.
   if (attemptCount >= MAX_PRINT_ATTEMPTS) {
     await supabase
       .from("print_jobs")
@@ -777,7 +827,9 @@ export async function schedulePrintJobRetry(
         claimed_by_device_id: null,
         updated_at: now.toISOString(),
       })
-      .eq("id", jobId);
+      .eq("id", jobId)
+      .eq("status", "printing")
+      .eq("claimed_by_device_id", deviceId);
     return "needs_manual";
   }
   await supabase
@@ -790,7 +842,9 @@ export async function schedulePrintJobRetry(
       claimed_by_device_id: null,
       updated_at: now.toISOString(),
     })
-    .eq("id", jobId);
+    .eq("id", jobId)
+    .eq("status", "printing")
+    .eq("claimed_by_device_id", deviceId);
   return "pending";
 }
 
@@ -854,11 +908,22 @@ export async function patchOrderKitchenFingerprints(
   tableId: string,
   fingerprints: Record<string, string>,
 ): Promise<void> {
+  const printedAt = new Date().toISOString();
+  // Atomic server-side mark — never overwrites lines edited meanwhile.
+  if (UUID_RE.test(tableId)) {
+    const { error } = await supabase.rpc("mark_kitchen_items_printed", {
+      p_table_id: tableId,
+      p_fingerprints: fingerprints,
+      p_printed_at: printedAt,
+    });
+    if (!error) return;
+    console.warn("[print_jobs] mark_kitchen_items_printed unavailable — legacy patch", error.message);
+  }
+
   const store = useTableOrdersStore.getState();
   const current = store.orders[tableId];
   if (!current || current.length === 0) return;
 
-  const printedAt = new Date().toISOString();
   const next = current.map((item) => {
     const fp = fingerprints[item.id];
     if (!fp) return item;

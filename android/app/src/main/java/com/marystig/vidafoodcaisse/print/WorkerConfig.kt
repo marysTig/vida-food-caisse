@@ -13,6 +13,15 @@ object WorkerConfig {
   private const val KEY_SUPABASE_URL = "supabase_url"
   private const val KEY_ANON_KEY = "supabase_anon_key"
   private const val KEY_ENABLED = "enabled"
+  private const val KEY_LANE_MODE = "bt_lane_mode"
+
+  /** Last print_settings.bt_lane_mode seen — used at boot before Supabase answers. */
+  fun laneMode(ctx: Context): String =
+    prefs(ctx).getString(KEY_LANE_MODE, null) ?: HubSettings.MODE_PARALLEL
+
+  fun setLaneMode(ctx: Context, mode: String) {
+    prefs(ctx).edit().putString(KEY_LANE_MODE, mode).apply()
+  }
 
   private fun prefs(ctx: Context): SharedPreferences =
     ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)

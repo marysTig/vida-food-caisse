@@ -10,9 +10,19 @@ import com.marystig.vidafoodcaisse.print.EscPosUsbPrinter
 import com.marystig.vidafoodcaisse.print.PrinterLinkStatusHub
 import com.marystig.vidafoodcaisse.print.WorkerConfig
 import com.marystig.vidafoodcaisse.print.WorkerRuntime
+import java.util.concurrent.Executors
 
 @CapacitorPlugin(name = "HubPrintWorker")
 class HubPrintWorkerPlugin : Plugin() {
+
+  /**
+   * Admin probe / test print can wait up to a minute for a printer lane.
+   * Capacitor runs every plugin call on one shared thread — run those ops here
+   * so wakeWorker / LED status calls are never queued behind them.
+   */
+  private val adminExecutor = Executors.newCachedThreadPool { r ->
+    Thread(r, "HubPrintAdmin").apply { isDaemon = true }
+  }
 
   override fun load() {
     PrinterLinkStatusHub.onChanged = {
@@ -27,6 +37,7 @@ class HubPrintWorkerPlugin : Plugin() {
   }
 
   override fun handleOnDestroy() {
+    adminExecutor.shutdown()
     if (PrinterLinkStatusHub.onChanged != null) {
       PrinterLinkStatusHub.onChanged = null
     }
@@ -136,33 +147,35 @@ class HubPrintWorkerPlugin : Plugin() {
       call.reject("Worker non démarré — lancez le hub natif d'abord")
       return
     }
-    try {
-      val (ok, detail) = if (transport == "usb") {
-        val vid = call.getInt("vendorId")
-          ?: run {
-            call.reject("vendorId requis pour USB")
-            return
+    adminExecutor.execute {
+      try {
+        val (ok, detail) = if (transport == "usb") {
+          val vid = call.getInt("vendorId")
+            ?: run {
+              call.reject("vendorId requis pour USB")
+              return@execute
+            }
+          val pid = call.getInt("productId")
+            ?: run {
+              call.reject("productId requis pour USB")
+              return@execute
+            }
+          loop.adminUsbProbe(name, vid, pid)
+        } else {
+          val mac = call.getString("macAddress")?.trim().orEmpty()
+          if (mac.isEmpty()) {
+            call.reject("macAddress requis")
+            return@execute
           }
-        val pid = call.getInt("productId")
-          ?: run {
-            call.reject("productId requis pour USB")
-            return
-          }
-        loop.adminUsbProbe(name, vid, pid)
-      } else {
-        val mac = call.getString("macAddress")?.trim().orEmpty()
-        if (mac.isEmpty()) {
-          call.reject("macAddress requis")
-          return
+          loop.adminProbe(name, mac)
         }
-        loop.adminProbe(name, mac)
+        val ret = JSObject()
+        ret.put("ok", ok)
+        ret.put("detail", detail)
+        call.resolve(ret)
+      } catch (e: Exception) {
+        call.reject(e.message ?: "adminProbe failed", e)
       }
-      val ret = JSObject()
-      ret.put("ok", ok)
-      ret.put("detail", detail)
-      call.resolve(ret)
-    } catch (e: Exception) {
-      call.reject(e.message ?: "adminProbe failed", e)
     }
   }
 
@@ -180,37 +193,39 @@ class HubPrintWorkerPlugin : Plugin() {
       call.reject("Worker non démarré — lancez le hub natif d'abord")
       return
     }
-    try {
-      val (ok, detail) = if (transport == "usb") {
-        val vid = call.getInt("vendorId")
-          ?: run {
-            call.reject("vendorId requis pour USB")
-            return
+    adminExecutor.execute {
+      try {
+        val (ok, detail) = if (transport == "usb") {
+          val vid = call.getInt("vendorId")
+            ?: run {
+              call.reject("vendorId requis pour USB")
+              return@execute
+            }
+          val pid = call.getInt("productId")
+            ?: run {
+              call.reject("productId requis pour USB")
+              return@execute
+            }
+          loop.adminUsbTestPrint(name, vid, pid, b64)
+        } else {
+          val mac = call.getString("macAddress")?.trim().orEmpty()
+          if (mac.isEmpty()) {
+            call.reject("macAddress et escposBase64 requis")
+            return@execute
           }
-        val pid = call.getInt("productId")
-          ?: run {
-            call.reject("productId requis pour USB")
-            return
-          }
-        loop.adminUsbTestPrint(name, vid, pid, b64)
-      } else {
-        val mac = call.getString("macAddress")?.trim().orEmpty()
-        if (mac.isEmpty()) {
-          call.reject("macAddress et escposBase64 requis")
-          return
+          loop.adminTestPrint(name, mac, b64)
         }
-        loop.adminTestPrint(name, mac, b64)
+        if (!ok) {
+          call.reject(detail)
+          return@execute
+        }
+        val ret = JSObject()
+        ret.put("ok", true)
+        ret.put("detail", detail)
+        call.resolve(ret)
+      } catch (e: Exception) {
+        call.reject(e.message ?: "adminTestPrint failed", e)
       }
-      if (!ok) {
-        call.reject(detail)
-        return
-      }
-      val ret = JSObject()
-      ret.put("ok", true)
-      ret.put("detail", detail)
-      call.resolve(ret)
-    } catch (e: Exception) {
-      call.reject(e.message ?: "adminTestPrint failed", e)
     }
   }
 }

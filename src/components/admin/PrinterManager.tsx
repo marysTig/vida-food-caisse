@@ -36,6 +36,9 @@ export function PrinterManager() {
     claimPrimaryHub,
     fallbackKitchenPrinterId,
     setFallbackPrinter,
+    btLaneMode,
+    kitchenAutoReroute,
+    updateHubOptions,
   } = usePrintSettingsStore();
   const { effective: hubKeepActive, setKeepActive } =
     useEffectiveHubKeepActive(isPrimaryHub);
@@ -588,6 +591,56 @@ export function PrinterManager() {
               }
             }}
             aria-label="Maintenir le hub actif sur cet appareil"
+          />
+        </div>
+
+        <div className="mt-4 flex items-start justify-between gap-4 border-t border-border pt-3">
+          <div className="min-w-0 flex-1">
+            <p className="text-sm font-semibold text-foreground">
+              Imprimantes cuisine en parallèle
+            </p>
+            <p className="mt-0.5 text-[11px] text-muted-foreground">
+              Une connexion Bluetooth permanente par imprimante cuisine : les tickets
+              partent en même temps sur chaque poste. Désactivez (mode sérialisé, une
+              seule connexion à la fois) uniquement si la tablette gère mal deux
+              connexions simultanées. Appliqué par le hub en ~15 s.
+            </p>
+          </div>
+          <Switch
+            checked={btLaneMode === "parallel"}
+            onCheckedChange={async (on) => {
+              try {
+                await updateHubOptions({ btLaneMode: on ? "parallel" : "serialized" });
+                toast.success(on ? "Mode parallèle activé" : "Mode sérialisé activé");
+              } catch (err: any) {
+                toast.error("Réglage non enregistré", { description: err.message });
+              }
+            }}
+            aria-label="Imprimantes cuisine en parallèle"
+          />
+        </div>
+
+        <div className="mt-4 flex items-start justify-between gap-4 border-t border-border pt-3">
+          <div className="min-w-0 flex-1">
+            <p className="text-sm font-semibold text-foreground">
+              Basculement automatique cuisine
+            </p>
+            <p className="mt-0.5 text-[11px] text-muted-foreground">
+              Si une imprimante cuisine est hors ligne, ses tickets s&apos;impriment
+              immédiatement sur l&apos;autre avec l&apos;entête « REROUTE ».
+            </p>
+          </div>
+          <Switch
+            checked={kitchenAutoReroute}
+            onCheckedChange={async (on) => {
+              try {
+                await updateHubOptions({ kitchenAutoReroute: on });
+                toast.success(on ? "Basculement activé" : "Basculement désactivé");
+              } catch (err: any) {
+                toast.error("Réglage non enregistré", { description: err.message });
+              }
+            }}
+            aria-label="Basculement automatique cuisine"
           />
         </div>
 

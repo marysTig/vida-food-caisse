@@ -76,14 +76,23 @@ export type NativePrinterLinkStatus = {
   live?: boolean;
   bonded?: boolean;
   aclConnected?: boolean;
+  /** Native circuit breaker open — kitchen tickets are rerouted / deferred. */
+  circuitOpen?: boolean;
 };
 
 const HubPrintWorker = registerPlugin<HubPrintWorkerPlugin>("HubPrintWorker");
 
 let nativeDrainActive = false;
 
+/**
+ * On Android the native HubPrintWorker always owns Bluetooth — even before
+ * startWorker resolves or after a WebView reload. The old in-memory flag reset
+ * to false on reload / transient plugin errors, letting the JS Cordova drain
+ * open RFCOMM concurrently with the (still running, START_STICKY) native
+ * service. Non-Android keeps the legacy flag.
+ */
 export function isNativePrintWorkerActive(): boolean {
-  return nativeDrainActive;
+  return isNativePrintWorkerPlatform() || nativeDrainActive;
 }
 
 export function setNativePrintWorkerActive(active: boolean): void {
@@ -160,7 +169,7 @@ export async function getNativePrintWorkerStatus(): Promise<HubPrintWorkerStatus
 }
 
 export async function wakeNativePrintWorker(): Promise<void> {
-  if (!nativeDrainActive || !isNativePrintWorkerPlatform()) return;
+  if (!isNativePrintWorkerPlatform()) return;
   try {
     await HubPrintWorker.wakeWorker();
   } catch {

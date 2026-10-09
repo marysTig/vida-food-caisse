@@ -44,8 +44,11 @@ object PrinterLinkStatusHub {
 
   @Volatile private var intentionalSwitchUntilMs = 0L
 
-  @Volatile var liveBtMac: String? = null
-    private set
+  /** Live RFCOMM sessions — parallel lanes hold one per kitchen printer. */
+  private val liveBtMacs = CopyOnWriteArraySet<String>()
+
+  /** MACs whose circuit breaker is open (jobs rerouted / deferred). */
+  private val circuitOpenMacs = CopyOnWriteArraySet<String>()
 
   @Volatile var liveUsbVid: Int? = null
     private set
@@ -115,19 +118,24 @@ object PrinterLinkStatusHub {
 
   fun onBtSessionOpened(mac: String) {
     val n = normalizeMac(mac)
-    liveBtMac = n
+    liveBtMacs.add(n)
     cancelOkClear(n)
     okBtMacAt[n] = System.currentTimeMillis()
     notifyChanged()
   }
 
   fun onBtSessionClosed(mac: String?) {
-    val n = mac?.let { normalizeMac(it) }
-    if (n == null || liveBtMac == n) {
-      liveBtMac = null
-    }
+    val n = mac?.let { normalizeMac(it) } ?: return
+    liveBtMacs.remove(n)
     // Do not clear okBtMacAt — sibling kitchens must keep their verified LED.
     notifyChanged()
+  }
+
+  fun setCircuitOpen(mac: String, open: Boolean) {
+    val n = normalizeMac(mac)
+    val changed = if (open) circuitOpenMacs.add(n) else circuitOpenMacs.remove(n)
+    if (open) okBtMacAt.remove(n)
+    if (changed) notifyChanged()
   }
 
   fun onBtSuccess(mac: String) {
@@ -233,13 +241,15 @@ object PrinterLinkStatusHub {
           val bonded = adapter.bondedDevices?.any {
             normalizeMac(it.address) == mac
           } == true
-          val live = liveBtMac == mac
+          val live = liveBtMacs.contains(mac)
           val acl = isAclConnected(mac)
           val lastOk = isRecentBtOk(mac)
+          val circuitOpen = circuitOpenMacs.contains(mac)
           // Green only when we have a live RFCOMM session or a recent successful
           // print/probe. ACL alone is a false green (Logcat: ACL up while CHANNEL1 fails).
           val state = when {
             !bonded -> "disconnected"
+            circuitOpen -> "disconnected"
             live || lastOk -> "ready"
             acl -> "pending"
             else -> "disconnected"
@@ -249,10 +259,12 @@ object PrinterLinkStatusHub {
           o.put("live", live)
           o.put("aclConnected", acl)
           o.put("verified", lastOk)
+          o.put("circuitOpen", circuitOpen)
           o.put(
             "detail",
             when {
               !bonded -> "BT non appairée"
+              circuitOpen -> "Hors ligne — tickets basculés"
               live -> "BT session"
               lastOk -> "BT prête"
               acl -> "BT lien — en attente"
