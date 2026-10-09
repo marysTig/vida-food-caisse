@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Connexion perdue</title>
+<style>
+  body { margin: 0; min-height: 100vh; display: grid; place-items: center;
+         font: 16px/1.5 system-ui, sans-serif; background: #F5F6F8; color: #111827; }
+  .card { text-align: center; padding: 2rem; max-width: 26rem; }
+  .dot { width: 14px; height: 14px; border-radius: 50%; background: #F97316;
+         margin: 0 auto 1.25rem; animation: pulse 1.2s ease-in-out infinite; }
+  @keyframes pulse { 50% { opacity: .25; } }
+  h1 { font-size: 1.35rem; margin: 0 0 .5rem; }
+  p { color: #6B7280; margin: 0 0 1.5rem; }
+  button { font: inherit; font-weight: 700; padding: .8rem 1.6rem; border: 0;
+           border-radius: .75rem; background: #F97316; color: #fff; }
+  small { display: block; margin-top: 1rem; color: #9CA3AF; }
+</style>
+</head>
+<body>
+<div class="card">
+  <div class="dot"></div>
+  <h1>Connexion internet perdue</h1>
+  <p>La caisse se reconnecte automatiquement dès que le réseau revient.<br>
+     Les impressions en file reprendront seules.</p>
+  <button onclick="retry()">Réessayer maintenant</button>
+  <small id="status">Nouvelle tentative…</small>
+</div>
+<script>
+  var TARGET = "__TARGET_URL__";
+  var PROBE = "__PROBE_URL__";
+  var busy = false, n = 0;
+  function retry() {
+    if (busy) return;
+    busy = true; n++;
+    document.getElementById("status").textContent = "Tentative " + n + "…";
+    // no-cors: any network answer (even opaque) means the server is reachable.
+    fetch(PROBE + "?ping=" + Date.now(), { mode: "no-cors", cache: "no-store" })
+      .then(function () { location.replace(TARGET); })
+      .catch(function () {
+        busy = false;
+        document.getElementById("status").textContent =
+          "Toujours hors ligne — nouvelle tentative dans 3 s";
+      });
+  }
+  window.addEventListener("online", retry);
+  setInterval(retry, 3000);
+  setTimeout(retry, 1000);
+</script>
+</body>
+</html>

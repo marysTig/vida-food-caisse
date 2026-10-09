@@ -13,6 +13,7 @@ import android.content.IntentFilter
 import android.content.pm.ServiceInfo
 import android.hardware.usb.UsbDevice
 import android.hardware.usb.UsbManager
+import android.net.wifi.WifiManager
 import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
@@ -50,6 +51,7 @@ class HubPrintWorkerService : Service() {
 
   private var loop: PrintWorkerLoop? = null
   private var wakeLock: PowerManager.WakeLock? = null
+  private var wifiLock: WifiManager.WifiLock? = null
   private var linkReceiversRegistered = false
 
   private val linkHotplugReceiver = object : BroadcastReceiver() {
@@ -202,7 +204,34 @@ class HubPrintWorkerService : Service() {
     releaseWakeLock()
   }
 
+  /**
+   * Wi-Fi power-save let TAB19 stay "associated" while unable to reach even its
+   * router (2026-10-09: DNS + gateway dead until Wi-Fi was toggled). The hub must
+   * reach Supabase 24/7, so keep the radio in full-power mode while it runs.
+   */
+  private fun acquireWifiLock() {
+    if (wifiLock?.isHeld == true) return
+    val wm = applicationContext.getSystemService(WIFI_SERVICE) as? WifiManager ?: return
+    val mode =
+      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) WifiManager.WIFI_MODE_FULL_LOW_LATENCY
+      else @Suppress("DEPRECATION") WifiManager.WIFI_MODE_FULL_HIGH_PERF
+    wifiLock = wm.createWifiLock(mode, "vidafood:HubPrintWifi").also {
+      it.setReferenceCounted(false)
+      it.acquire()
+    }
+  }
+
+  private fun releaseWifiLock() {
+    try {
+      if (wifiLock?.isHeld == true) wifiLock?.release()
+    } catch (_: Exception) {
+      /* ignore */
+    }
+    wifiLock = null
+  }
+
   private fun acquireWakeLock() {
+    acquireWifiLock()
     if (wakeLock?.isHeld == true) return
     val pm = getSystemService(POWER_SERVICE) as PowerManager
     wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "vidafood:HubPrintWorker")
@@ -213,6 +242,7 @@ class HubPrintWorkerService : Service() {
   }
 
   private fun releaseWakeLock() {
+    releaseWifiLock()
     try {
       if (wakeLock?.isHeld == true) wakeLock?.release()
     } catch (_: Exception) {

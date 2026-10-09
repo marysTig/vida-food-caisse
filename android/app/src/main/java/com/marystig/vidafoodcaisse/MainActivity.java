@@ -9,6 +9,7 @@ import android.os.Build;
 import android.os.Bundle;
 import androidx.core.app.ActivityCompat;
 import androidx.core.content.ContextCompat;
+import com.getcapacitor.Bridge;
 import com.getcapacitor.BridgeActivity;
 import com.marystig.vidafoodcaisse.print.PrintWorkerLoop;
 import com.marystig.vidafoodcaisse.print.WorkerRuntime;
@@ -30,9 +31,12 @@ public class MainActivity extends BridgeActivity {
     registerPlugin(HubPrintWorkerPlugin.class);
     super.onCreate(savedInstanceState);
     requestRuntimePermissions();
-    // Remote WebView can keep a stale JS bundle after USB deploy — force refresh once.
-    if (getBridge() != null && getBridge().getWebView() != null) {
-      getBridge().getWebView().clearCache(true);
+    // No clearCache() on launch: Vercel serves HTML with must-revalidate and JS
+    // with immutable hashed names, so the cache is never stale — wiping it only
+    // forced a full re-download on every start (slow / fails on weak Wi-Fi).
+    Bridge bridge = getBridge();
+    if (bridge != null && bridge.getServerUrl() != null) {
+      bridge.setWebViewClient(new OfflineAwareWebViewClient(bridge, bridge.getServerUrl()));
     }
     handleUsbAttachIntent(getIntent());
   }

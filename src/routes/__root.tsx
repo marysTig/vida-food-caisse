@@ -28,6 +28,11 @@ import {
   usePrintSettingsStore,
 } from "../lib/printSettingsStore";
 import { scheduleHubAutoBluetoothProbe } from "../lib/printerProbe";
+import {
+  installChunkErrorRecovery,
+  isChunkLoadError,
+  reloadForChunkError,
+} from "../lib/chunkReload";
 
 function NotFoundComponent() {
   return (
@@ -54,9 +59,12 @@ function NotFoundComponent() {
 function ErrorComponent({ error, reset }: { error: Error; reset: () => void }) {
   console.error(error);
   const router = useRouter();
+  const chunkError = isChunkLoadError(error);
   useEffect(() => {
+    // Missing route chunk (network blip / stale build) — a reload fixes it.
+    if (chunkError && reloadForChunkError()) return;
     reportLovableError(error, { boundary: "tanstack_root_error_component" });
-  }, [error]);
+  }, [error, chunkError]);
 
   return (
     <div className="flex min-h-screen items-center justify-center bg-background px-4">
@@ -70,6 +78,10 @@ function ErrorComponent({ error, reset }: { error: Error; reset: () => void }) {
         <div className="mt-6 flex flex-wrap justify-center gap-2">
           <button
             onClick={() => {
+              if (chunkError) {
+                window.location.reload();
+                return;
+              }
               router.invalidate();
               reset();
             }}
@@ -156,6 +168,10 @@ function RootComponent() {
   useTableSync(isLoggedIn);
   useTableOrdersSync(isLoggedIn);
   useGlobalSupplementsSync(isLoggedIn);
+
+  useEffect(() => {
+    installChunkErrorRecovery();
+  }, []);
 
   // ── Lifecycle Capacitor Android : retour au foreground ──────────────────────
   // Tables/orders: logged-in only. Print Realtime: primary hub always (session-decoupled).
