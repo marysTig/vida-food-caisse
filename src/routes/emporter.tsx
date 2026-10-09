@@ -87,6 +87,9 @@ function EmporterPage() {
   }, [checkoutTable, _patchOrder, _patchNote]);
 
   const handleStatusChange = async (id: string, status: "libre") => {
+    // Cancelled takeaway: drop its order, or the next "À emporter" (which reuses
+    // free takeaway slots) opens with the cancelled items still in the cart.
+    clearOrder(id);
     await updateTable(id, {
       status: "libre",
       orderTotal: 0,
@@ -231,6 +234,7 @@ function EmporterPage() {
 
       {activeTable && (
         <TableOrderSidebar
+          key={activeTable.id}
           tableId={activeTable.id}
           tableNumber={activeTable.number}
           onClose={() => setActiveTable(null)}

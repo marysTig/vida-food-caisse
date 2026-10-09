@@ -34,7 +34,8 @@ async function fetchSupplementsFromDB(): Promise<GlobalSupplement[]> {
 
   if (error) {
     console.error("Erreur chargement suppléments globaux:", error.message);
-    return [];
+    // Throw (not []) so a failed reload keeps the current supplements.
+    throw new Error(error.message);
   }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any

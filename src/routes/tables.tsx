@@ -312,8 +312,11 @@ function TablesPage() {
         roomId = await addRoom("Emporter");
       }
 
-      // Chercher une table libre existante
-      const freeTable = tableData.find(t => t.roomId === roomId && t.status === "libre");
+      // Reuse a free takeaway slot only if its cart is empty — a leftover order
+      // (cancelled / never validated) would show up in the new customer's cart.
+      const freeTable = tableData.find(
+        t => t.roomId === roomId && t.status === "libre" && !(orders[t.id]?.length),
+      );
       if (freeTable) {
         setActiveTable({ id: freeTable.id, number: freeTable.number });
       } else {
@@ -344,12 +347,16 @@ function TablesPage() {
       payload.orderTotal = 0;
       payload.parentTableId = null;
     }
+    // Freeing a table ends its order — otherwise the next customer seated there
+    // starts with the previous cart.
+    if (status === "libre") clearOrder(id);
     await updateTable(id, payload);
 
     // If freeing a table, also free its merged children
     if (status === "libre") {
       const children = tableData.filter(t => t.parentTableId === id);
       for (const child of children) {
+        clearOrder(child.id);
         await updateTable(child.id, {
           status: "libre",
           occupiedSince: null as any,
@@ -358,7 +365,7 @@ function TablesPage() {
         });
       }
     }
-  }, [updateTable, tableData]);
+  }, [updateTable, tableData, clearOrder]);
 
   // ── Table selection → ouvre directement la modal ou gère la fusion
   const handleSelectTable = useCallback((id: string, number: number) => {

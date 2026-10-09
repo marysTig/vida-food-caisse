@@ -558,7 +558,7 @@ export function TableOrderSidebar({ tableId, tableNumber, mergedIds, onClose }: 
   }, [category, query, products]);
 
   const addProduct = useCallback((product: Product, selectedOption?: ProductOption) => {
-    const prev = orders[tableId] || [];
+    const prev = useTableOrdersStore.getState().orders[tableId] || [];
     const existing = prev.find(
       (item) =>
         item.product.id === product.id &&
@@ -573,11 +573,17 @@ export function TableOrderSidebar({ tableId, tableNumber, mergedIds, onClose }: 
     } else {
       setOrder(tableId, [
         ...prev,
-        { id: `${product.id}-${Date.now()}`, product, quantity: 1, supplements: [], selectedOption },
+        {
+          id: `${product.id}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+          product,
+          quantity: 1,
+          supplements: [],
+          selectedOption,
+        },
       ]);
     }
     playAddSound();
-  }, [orders, tableId, setOrder]);
+  }, [tableId, setOrder]);
 
   const handleProductSelect = useCallback((product: Product) => {
     if (product.options && product.options.length > 0) {
@@ -588,12 +594,12 @@ export function TableOrderSidebar({ tableId, tableNumber, mergedIds, onClose }: 
   }, [addProduct]);
 
   const increase = useCallback((id: string) => {
-    const prev = orders[tableId] || [];
+    const prev = useTableOrdersStore.getState().orders[tableId] || [];
     setOrder(tableId, prev.map((item) => (item.id === id ? { ...item, quantity: item.quantity + 1 } : item)));
-  }, [orders, tableId, setOrder]);
+  }, [tableId, setOrder]);
 
   const decrease = useCallback((id: string) => {
-    const prev = orders[tableId] || [];
+    const prev = useTableOrdersStore.getState().orders[tableId] || [];
     setOrder(tableId, prev.flatMap((item) =>
       item.id === id
         ? item.quantity > 1
@@ -601,12 +607,12 @@ export function TableOrderSidebar({ tableId, tableNumber, mergedIds, onClose }: 
           : []
         : [item],
     ));
-  }, [orders, tableId, setOrder]);
+  }, [tableId, setOrder]);
 
   const remove = useCallback((id: string) => {
-    const prev = orders[tableId] || [];
+    const prev = useTableOrdersStore.getState().orders[tableId] || [];
     setOrder(tableId, prev.filter((item) => item.id !== id));
-  }, [orders, tableId, setOrder]);
+  }, [tableId, setOrder]);
 
   const confirmModifier = (
     id: string,
@@ -614,7 +620,7 @@ export function TableOrderSidebar({ tableId, tableNumber, mergedIds, onClose }: 
     note: string,
     customPrice?: number,
   ) => {
-    const prev = orders[tableId] || [];
+    const prev = useTableOrdersStore.getState().orders[tableId] || [];
     setOrder(tableId, prev.map((item) =>
       item.id === id
         ? { ...item, supplements, note: note.trim() || undefined, customPrice }
@@ -789,7 +795,7 @@ export function TableOrderSidebar({ tableId, tableNumber, mergedIds, onClose }: 
     id: string,
     supplements: { id: string; label: string; price: number }[]
   ) => {
-    const prev = orders[tableId] || [];
+    const prev = useTableOrdersStore.getState().orders[tableId] || [];
     setOrder(tableId, prev.map((item) =>
       item.id === id
         ? { ...item, supplements }
@@ -797,7 +803,7 @@ export function TableOrderSidebar({ tableId, tableNumber, mergedIds, onClose }: 
     ));
     setSupplementModalOpen(false);
     setActiveSupplementItem(null);
-  }, [orders, tableId, setOrder]);
+  }, [tableId, setOrder]);
 
   return (
     <div className="fixed inset-0 z-[100] flex justify-end bg-black/40">

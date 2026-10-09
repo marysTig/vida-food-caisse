@@ -12,7 +12,9 @@ export type CategoryItem = {
 
 // ── Supabase helpers ──────────────────────────────────────────────
 
-async function fetchCategoriesFromDB(): Promise<CategoryItem[]> {
+// Fetchers return null on error so callers keep the last good menu — returning
+// [] made the whole menu vanish on a network blip during a realtime reload.
+async function fetchCategoriesFromDB(): Promise<CategoryItem[] | null> {
   const { data, error } = await supabase
     .from("categories")
     .select("id, name, image_url, created_at, sort_order")
@@ -21,7 +23,7 @@ async function fetchCategoriesFromDB(): Promise<CategoryItem[]> {
 
   if (error) {
     console.error("Erreur chargement catégories:", error.message);
-    return [];
+    return null;
   }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -33,7 +35,7 @@ async function fetchCategoriesFromDB(): Promise<CategoryItem[]> {
   }));
 }
 
-async function fetchProductsFromDB(): Promise<Product[]> {
+async function fetchProductsFromDB(): Promise<Product[] | null> {
   const { data, error } = await supabase
     .from("products")
     .select("id, name, category_id, price, image_url, available, options, ingredients, created_at, sort_order, categories(id, name)")
@@ -42,7 +44,7 @@ async function fetchProductsFromDB(): Promise<Product[]> {
 
   if (error) {
     console.error("Erreur chargement produits:", error.message);
-    return [];
+    return null;
   }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -98,6 +100,19 @@ const useMenuGlobalState = create<MenuGlobalState>((set) => ({
 // le nombre de composants appelant useMenuStore)
 
 let _menuInitialized = false;
+/** Only the newest reload may apply — overlapping reloads can finish out of order. */
+let _menuLoadSeq = 0;
+
+async function loadMenu(
+  setCategories: (c: CategoryItem[]) => void,
+  setProducts: (p: Product[]) => void,
+): Promise<void> {
+  const seq = ++_menuLoadSeq;
+  const [cats, prods] = await Promise.all([fetchCategoriesFromDB(), fetchProductsFromDB()]);
+  if (seq !== _menuLoadSeq) return;
+  if (cats) setCategories(cats);
+  if (prods) setProducts(prods);
+}
 
 async function _initMenuStore(
   setCategories: (c: CategoryItem[]) => void,
@@ -108,19 +123,10 @@ async function _initMenuStore(
   _menuInitialized = true;
 
   setLoading(true);
-  const [cats, prods] = await Promise.all([
-    fetchCategoriesFromDB(),
-    fetchProductsFromDB(),
-  ]);
-  setCategories(cats);
-  setProducts(prods);
+  await loadMenu(setCategories, setProducts);
   setLoading(false);
 
-  const reload = async () => {
-    const [c, p] = await Promise.all([fetchCategoriesFromDB(), fetchProductsFromDB()]);
-    setCategories(c);
-    setProducts(p);
-  };
+  const reload = () => loadMenu(setCategories, setProducts);
 
   supabase
     .channel("menu-categories-global")
@@ -144,14 +150,10 @@ export function useMenuStore() {
     _initMenuStore(setCategories, setProducts, setLoading);
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const reload = useCallback(async () => {
-    const [cats, prods] = await Promise.all([
-      fetchCategoriesFromDB(),
-      fetchProductsFromDB(),
-    ]);
-    setCategories(cats);
-    setProducts(prods);
-  }, [setCategories, setProducts]);
+  const reload = useCallback(
+    () => loadMenu(setCategories, setProducts),
+    [setCategories, setProducts],
+  );
 
   // ── CRUD Catégories ─────────────────────────────────────────────
 

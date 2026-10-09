@@ -51,7 +51,8 @@ async function fetchRoomsFromDB(): Promise<RoomItem[]> {
 
   if (error) {
     console.error("Erreur chargement salles:", error.message);
-    return [];
+    // Throw (not []) so a network blip keeps the current floor plan on screen.
+    throw new Error(error.message);
   }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -69,7 +70,7 @@ async function fetchTablesFromDB(): Promise<TableItem[]> {
 
   if (error) {
     console.error("Erreur chargement tables:", error.message);
-    return [];
+    throw new Error(error.message);
   }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any

@@ -132,7 +132,9 @@ async function fetchPrintersFromDB(): Promise<Printer[]> {
 
   if (error) {
     console.error("Erreur chargement imprimantes:", error.message);
-    return [];
+    // Throw (not []) so a failed reload keeps the current printers — an empty
+    // list made "Envoyer en cuisine" fail with "Aucune imprimante cuisine".
+    throw new Error(error.message);
   }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -163,17 +165,17 @@ async function _initPrinterStore(
   if (_printerInitialized) return;
   _printerInitialized = true;
 
-  setLoading(true);
-  const printers = await fetchPrintersFromDB();
-  setPrinters(printers);
-  setLoading(false);
-
   const reload = async () => {
     setLoading(true);
-    const p = await fetchPrintersFromDB();
-    setPrinters(p);
-    setLoading(false);
+    try {
+      setPrinters(await fetchPrintersFromDB());
+    } catch {
+      /* keep current printers */
+    } finally {
+      setLoading(false);
+    }
   };
+  await reload();
 
   supabase
     .channel("printers-global")
@@ -190,9 +192,13 @@ export function usePrinterStore() {
 
   const reload = useCallback(async () => {
     setLoading(true);
-    const p = await fetchPrintersFromDB();
-    setPrinters(p);
-    setLoading(false);
+    try {
+      setPrinters(await fetchPrintersFromDB());
+    } catch {
+      /* keep current printers */
+    } finally {
+      setLoading(false);
+    }
   }, [setPrinters, setLoading]);
 
   const addPrinter = async (printer: Omit<Printer, "id">) => {
