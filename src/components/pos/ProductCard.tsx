@@ -1,7 +1,8 @@
 import type { Product } from "@/data/menu";
 import { formatDA } from "@/data/menu";
-import { Plus } from "lucide-react";
-import { useMenuStore } from "@/lib/menuStore";
+import { memo } from "react";
+import { useMenuGlobalState } from "@/lib/menuStore";
+import { optimizedImageUrl } from "@/lib/cloudinary";
 
 type ProductCardProps = {
   product: Product;
@@ -9,10 +10,13 @@ type ProductCardProps = {
   readOnly?: boolean;
 };
 
-export function ProductCard({ product, onSelect, readOnly = false }: ProductCardProps) {
-  const { categories } = useMenuStore();
-  const categoryItem = categories.find((c) => c.name === product.category);
-  const displayImage = product.image || categoryItem?.image || "";
+function ProductCardBase({ product, onSelect, readOnly = false }: ProductCardProps) {
+  // Subscribe to the one string this card needs, not the whole menu hook (with
+  // its init effect and a dozen functions) — 83 cards × every menu change.
+  const categoryImage = useMenuGlobalState(
+    (s) => s.categories.find((c) => c.name === product.category)?.image ?? "",
+  );
+  const displayImage = optimizedImageUrl(product.image || categoryImage || "");
 
   const inner = (
     <>
@@ -23,8 +27,9 @@ export function ProductCard({ product, onSelect, readOnly = false }: ProductCard
               src={displayImage}
               alt={product.name}
               loading="lazy"
-              width={512}
-              height={512}
+              decoding="async"
+              width={240}
+              height={240}
               className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-105"
             />
           ) : (
@@ -99,3 +104,7 @@ export function ProductCard({ product, onSelect, readOnly = false }: ProductCard
     </div>
   );
 }
+
+// onSelect is a stable callback in the order panel and `product` keeps its identity
+// between menu reloads unless it changed, so most cards skip re-rendering entirely.
+export const ProductCard = memo(ProductCardBase);

@@ -86,7 +86,7 @@ type MenuGlobalState = {
   setLoading: (loading: boolean) => void;
 };
 
-const useMenuGlobalState = create<MenuGlobalState>((set) => ({
+export const useMenuGlobalState = create<MenuGlobalState>((set) => ({
   products: [],
   categories: [],
   loading: true,
@@ -110,8 +110,23 @@ async function loadMenu(
   const seq = ++_menuLoadSeq;
   const [cats, prods] = await Promise.all([fetchCategoriesFromDB(), fetchProductsFromDB()]);
   if (seq !== _menuLoadSeq) return;
-  if (cats) setCategories(cats);
-  if (prods) setProducts(prods);
+  const current = useMenuGlobalState.getState();
+  if (cats) setCategories(keepUnchanged(current.categories, cats));
+  if (prods) setProducts(keepUnchanged(current.products, prods));
+}
+
+/**
+ * Reuse the existing object for every row that did not change. A realtime reload
+ * otherwise creates 83 new product objects, defeating memoization: every card
+ * re-rendered (and re-decoded its image) for a one-product edit.
+ */
+function keepUnchanged<T extends { id: string }>(prev: T[], next: T[]): T[] {
+  if (prev.length === 0) return next;
+  const old = new Map(prev.map((p) => [p.id, p]));
+  return next.map((n) => {
+    const o = old.get(n.id);
+    return o && JSON.stringify(o) === JSON.stringify(n) ? o : n;
+  });
 }
 
 async function _initMenuStore(

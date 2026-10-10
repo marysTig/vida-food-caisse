@@ -25,7 +25,8 @@ type TableOrdersState = {
   setOrder: (tableId: string, items: CartItem[]) => void;
   setOrderNote: (tableId: string, note: string) => void;
   setOrderSupplements: (tableId: string, supplements: GlobalSupplement[]) => void;
-  flushOrder: (tableId: string) => Promise<void>;
+  /** @returns false when the save failed (callers that must not proceed check it). */
+  flushOrder: (tableId: string) => Promise<boolean>;
   clearOrder: (tableId: string) => void;
   mergeOrders: (primaryId: string, sourceIds: string[]) => void;
 };
@@ -62,7 +63,7 @@ async function writeOrder(
   note: string,
   globalSupplements: GlobalSupplement[],
   label: string,
-) {
+): Promise<boolean> {
   const now = Date.now();
   const stamps = (sentStamps[tableId] ??= []);
   stamps.push(now);
@@ -79,7 +80,14 @@ async function writeOrder(
       },
       { onConflict: "table_id" },
     );
-    if (error) console.error(`[table_orders] ${label} error:`, error.message);
+    if (error) {
+      console.error(`[table_orders] ${label} error:`, error.message);
+      return false;
+    }
+    return true;
+  } catch (err) {
+    console.error(`[table_orders] ${label} exception:`, err);
+    return false;
   } finally {
     inFlight[tableId] = Math.max(0, (inFlight[tableId] ?? 1) - 1);
   }
@@ -175,7 +183,7 @@ export const useTableOrdersStore = create<TableOrdersState>((set, get) => ({
     const items = get().orders[tableId] ?? [];
     const note = get().orderNotes[tableId] ?? "";
     const supplements = get().orderSupplements[tableId] ?? [];
-    await writeOrder(tableId, items, note, supplements, "flushOrder");
+    return writeOrder(tableId, items, note, supplements, "flushOrder");
   },
 
   clearOrder: (tableId) => {

@@ -30,7 +30,7 @@ type TableGlobalState = {
   setLoading: (loading: boolean) => void;
 };
 
-const useTableGlobalState = create<TableGlobalState>((set) => ({
+export const useTableGlobalState = create<TableGlobalState>((set) => ({
   rooms: [],
   tables: [],
   loading: true,
@@ -208,6 +208,38 @@ export function useTableSync(enabled = true) {
 
 // ── Hook principal ────────────────────────────────────────────────
 
+/**
+ * Optimistic update + DB write, usable without subscribing the caller to the
+ * whole tables list (the order panel only needs its own table).
+ */
+export async function updateTableRecord(id: string, table: Partial<TableItem>): Promise<void> {
+  const { setTables } = useTableGlobalState.getState();
+  // Optimistic update
+  setTables((prev) => prev.map((t) => (t.id === id ? { ...t, ...table } : t)));
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const payload: Record<string, any> = {};
+  if (table.number !== undefined) payload["number"] = table.number;
+  if (table.seats !== undefined) payload["seats"] = table.seats;
+  if (table.status !== undefined) payload["status"] = table.status;
+  if (table.roomId !== undefined) payload["room_id"] = table.roomId;
+  if (table.orderTotal !== undefined) payload["order_total"] = table.orderTotal;
+  if (table.occupiedSince !== undefined) payload["occupied_since"] = table.occupiedSince;
+  // Force null if explicitly passed as null (though typed as string, we might pass null as any to clear it)
+  if (table.occupiedSince === null) payload["occupied_since"] = null;
+  if (table.parentTableId !== undefined) payload["parent_table_id"] = table.parentTableId;
+
+  const { error } = await supabase.from("tables").update(payload).eq("id", id);
+  if (error) {
+    console.error("Erreur updateTable:", error.message);
+    // Fallback
+    await reloadTableStore();
+    throw new Error(error.message);
+  }
+  // We rely on the Supabase Realtime subscription to reload the data eventually,
+  // or the optimistic state will persist until refresh.
+}
+
 export function useTableStore() {
   const { rooms, tables, loading, setTables } = useTableGlobalState();
 
@@ -244,34 +276,7 @@ export function useTableStore() {
     return data.id as string;
   };
 
-  const updateTable = async (id: string, table: Partial<TableItem>) => {
-    // Optimistic update
-    setTables((prev) =>
-      prev.map((t) => (t.id === id ? { ...t, ...table } : t))
-    );
-
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const payload: Record<string, any> = {};
-    if (table.number !== undefined) payload["number"] = table.number;
-    if (table.seats !== undefined) payload["seats"] = table.seats;
-    if (table.status !== undefined) payload["status"] = table.status;
-    if (table.roomId !== undefined) payload["room_id"] = table.roomId;
-    if (table.orderTotal !== undefined) payload["order_total"] = table.orderTotal;
-    if (table.occupiedSince !== undefined) payload["occupied_since"] = table.occupiedSince;
-    // Force null if explicitly passed as null (though typed as string, we might pass null as any to clear it)
-    if (table.occupiedSince === null) payload["occupied_since"] = null;
-    if (table.parentTableId !== undefined) payload["parent_table_id"] = table.parentTableId;
-
-    const { error } = await supabase.from("tables").update(payload).eq("id", id);
-    if (error) {
-      console.error("Erreur updateTable:", error.message);
-      // Fallback
-      await reload();
-      throw new Error(error.message);
-    }
-    // We rely on the Supabase Realtime subscription to reload the data eventually,
-    // or the optimistic state will persist until refresh.
-  };
+  const updateTable = updateTableRecord;
 
   const deleteTable = async (id: string) => {
     const { error } = await supabase.from("tables").delete().eq("id", id);

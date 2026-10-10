@@ -10,7 +10,7 @@ import { OptionSelectModal } from "./OptionSelectModal";
 import { type Category, type Product, type ProductOption, formatDA } from "@/data/menu";
 import { useMenuStore } from "@/lib/menuStore";
 import { type CartItem, cartSubtotal, lineTotal } from "@/lib/cart";
-import { useTableStore } from "@/lib/tableStore";
+import { useTableGlobalState, updateTableRecord } from "@/lib/tableStore";
 import { useTableOrdersStore } from "@/lib/tableOrdersStore";
 import { useSessionStore } from "@/lib/authStore";
 import { supabase } from "@/lib/supabase";
@@ -24,6 +24,11 @@ import { recordZReport } from "@/lib/zReport";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { useGlobalSupplementsStore, reloadGlobalSupplements, type GlobalSupplement } from "@/lib/globalSupplementsStore";
 import { playAddSound, playCashSound } from "@/lib/posSounds";
+
+// Stable references: a selector returning a fresh `[]` each time would make
+// zustand re-render the panel on every store change.
+const EMPTY_ITEMS: CartItem[] = [];
+const EMPTY_SUPPLEMENTS: GlobalSupplement[] = [];
 
 type TableOrderSidebarProps = {
   tableId: string;
@@ -177,13 +182,14 @@ type OrderListDesktopProps = {
   onNoteChange: (note: string) => void;
   onValidate: () => void;
   onCheckout: () => void;
+  validating: boolean;
   onReprintKitchen?: () => void;
   onAddSupplement?: (item: CartItem) => void;
 };
 
 function OrderListDesktop({
   tableNumber, mergedNumbers, items, orderNote, itemCount, total,
-  isOccupied, isServeur, decrease, increase, remove, onNoteChange, onValidate, onCheckout, onReprintKitchen, onAddSupplement
+  isOccupied, isServeur, decrease, increase, remove, onNoteChange, onValidate, onCheckout, validating, onReprintKitchen, onAddSupplement
 }: OrderListDesktopProps) {
 
   return (
@@ -310,10 +316,10 @@ function OrderListDesktop({
             <div className="flex gap-2">
               <button
                 onClick={onValidate}
-                disabled={items.length === 0}
+                disabled={items.length === 0 || validating}
                 className="flex-1 rounded-xl bg-secondary py-3.5 text-sm font-bold text-secondary-foreground shadow-sm transition-all hover:-translate-y-0.5 active:translate-y-0 disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                Mettre à jour
+                {validating ? "Envoi…" : "Mettre à jour"}
               </button>
               {!isServeur && (
                 <button
@@ -339,10 +345,10 @@ function OrderListDesktop({
         ) : (
           <button
             onClick={onValidate}
-            disabled={items.length === 0}
+            disabled={items.length === 0 || validating}
             className="w-full rounded-xl bg-primary py-3.5 text-sm font-bold text-primary-foreground shadow-lg transition-all hover:-translate-y-0.5 hover:shadow-xl active:translate-y-0 disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            Valider la commande
+            {validating ? "Envoi en cours…" : "Valider la commande"}
           </button>
         )}
       </div>
@@ -413,8 +419,11 @@ function ProductSelectorDesktop({
 // ── TableOrderSidebar ─────────────────────────────────────────────────────────
 
 export function TableOrderSidebar({ tableId, tableNumber, mergedIds, onClose }: TableOrderSidebarProps) {
-  const { tables, updateTable, rooms } = useTableStore();
-  const table = tables.find((t) => t.id === tableId);
+  // Narrow subscriptions: the panel re-renders only when ITS table / cart changes,
+  // not on every update of every table or order from any device.
+  const table = useTableGlobalState((s) => s.tables.find((t) => t.id === tableId));
+  const rooms = useTableGlobalState((s) => s.rooms);
+  const updateTable = updateTableRecord;
   const isOccupied = table?.status === "occupee";
   const currentUser = useSessionStore((s) => s.currentUser);
   const isServeur = currentUser?.role === "serveur";
@@ -427,19 +436,23 @@ export function TableOrderSidebar({ tableId, tableNumber, mergedIds, onClose }: 
     ? `EMPORTER #${tableNumber}`
     : tableNumber;
 
-  const mergedNumbers = mergedIds && mergedIds.length > 0
-    ? mergedIds.map(id => tables.find(t => t.id === id)?.number).filter(Boolean).join(", ")
-    : null;
+  const mergedNumbers = useTableGlobalState((s) =>
+    mergedIds && mergedIds.length > 0
+      ? mergedIds.map((id) => s.tables.find((t) => t.id === id)?.number).filter(Boolean).join(", ")
+      : null,
+  );
 
-  const { orders, orderNotes, orderSupplements, setOrder, setOrderNote, setOrderSupplements, flushOrder, clearOrder, _patchOrder, _patchNote, _patchSupplements } = useTableOrdersStore();
+  // Actions are created once by zustand (stable) — no subscription needed for them.
+  const { setOrder, setOrderNote, flushOrder, clearOrder, _patchOrder, _patchNote, _patchSupplements } =
+    useTableOrdersStore.getState();
   const { supplements: allGlobalSupplements } = useGlobalSupplementsStore();
 
   const [category, setCategory] = useState<Category>("Tous");
   const [query, setQuery] = useState("");
 
-  const items = orders[tableId] || [];
-  const orderNote = orderNotes[tableId] || "";
-  const activeSupplements = orderSupplements[tableId] || [];
+  const items = useTableOrdersStore((s) => s.orders[tableId]) ?? EMPTY_ITEMS;
+  const orderNote = useTableOrdersStore((s) => s.orderNotes[tableId]) ?? "";
+  const activeSupplements = useTableOrdersStore((s) => s.orderSupplements[tableId]) ?? EMPTY_SUPPLEMENTS;
   const total = cartSubtotal(items);
 
   const [editing, setEditing] = useState<CartItem | null>(null);
@@ -448,6 +461,11 @@ export function TableOrderSidebar({ tableId, tableNumber, mergedIds, onClose }: 
   const [supplementModalOpen, setSupplementModalOpen] = useState(false);
   const [activeSupplementItem, setActiveSupplementItem] = useState<CartItem | null>(null);
   const [checkoutOpen, setCheckoutOpen] = useState(false);
+  // One validation / checkout at a time: a second tap while the first is still
+  // saving (the button used to flip to "Mettre à jour" mid-save) ran a parallel copy.
+  const [validating, setValidating] = useState(false);
+  const validatingRef = useRef(false);
+  const checkingOutRef = useRef(false);
 
   // When the Cashier opens the checkout modal for a server-created order, items may
   // not yet be in Zustand (async fetch still running). Re-fetch from Supabase to ensure
@@ -487,9 +505,13 @@ export function TableOrderSidebar({ tableId, tableNumber, mergedIds, onClose }: 
   const { printers } = usePrinterStore();
 
   // Garantir que les suppléments globaux sont chargés quand la sidebar s'ouvre
+  // Realtime (useGlobalSupplementsSync) keeps them current — only fetch if the
+  // list is still empty, instead of re-downloading on every panel open.
   useEffect(() => {
-    void reloadGlobalSupplements();
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+    if (useGlobalSupplementsStore.getState().supplements.length === 0) {
+      void reloadGlobalSupplements();
+    }
+  }, []);
 
   useEffect(() => {
     let mounted = true;
@@ -630,129 +652,159 @@ export function TableOrderSidebar({ tableId, tableNumber, mergedIds, onClose }: 
   };
 
   const handleValidateOrder = async () => {
-    console.log("[SERVER ORDER] Creating order");
-    console.log("[SERVER ORDER] Table ID:", tableId);
-    console.log("[SERVER ORDER] Items:", items);
+    if (validatingRef.current) return;
+    const initial = useTableOrdersStore.getState().orders[tableId] ?? [];
+    if (initial.length === 0) return;
 
-    // Flush immédiat vers Supabase — garantit que la Caisse verra les items
-    // dans table_orders AVANT de recevoir le statut "occupee".
-    await flushOrder(tableId);
-
-    const now = new Date().toISOString();
-    await updateTable(tableId, {
-      status: "occupee",
-      orderTotal: total,
-      ...(isOccupied ? {} : { occupiedSince: now }),
-    });
-
-    if (mergedIds && mergedIds.length > 0) {
-      for (const mId of mergedIds) {
-        const mTable = tables.find(t => t.id === mId);
-        if (mTable?.status !== "occupee") {
-          await updateTable(mId, {
-            status: "occupee",
-            occupiedSince: now
-          });
-        }
-      }
-    }
-
-    // --- FILE D'ATTENTE CUISINE (delta, idempotent, hub primaire) ---
+    validatingRef.current = true;
+    setValidating(true);
     try {
-      const result = await enqueueKitchenPrint({
+      // 1. The cart must be in Supabase BEFORE the table shows "occupée", so the
+      //    Caisse never opens a table whose items are not there yet.
+      const saved = await flushOrder(tableId);
+      if (!saved) {
+        toast.error("Commande non enregistrée", {
+          description: "Vérifiez la connexion puis réessayez.",
+        });
+        return;
+      }
+
+      // Latest cart / note / supplements (edits made while saving are included).
+      const live = useTableOrdersStore.getState();
+      const orderItems = live.orders[tableId] ?? initial;
+      const liveNote = live.orderNotes[tableId] ?? "";
+      const liveSupplements = live.orderSupplements[tableId] ?? [];
+      const orderTotal = cartSubtotal(orderItems);
+      const now = new Date().toISOString();
+      const knownTables = useTableGlobalState.getState().tables;
+
+      // 2. Table status and kitchen ticket are independent — run them together
+      //    instead of one after the other (was 4–6 sequential round trips).
+      const tableWork = Promise.all([
+        updateTable(tableId, {
+          status: "occupee",
+          orderTotal,
+          ...(isOccupied ? {} : { occupiedSince: now }),
+        }),
+        ...(mergedIds ?? [])
+          .filter((mId) => knownTables.find((t) => t.id === mId)?.status !== "occupee")
+          .map((mId) => updateTable(mId, { status: "occupee", occupiedSince: now })),
+      ]);
+
+      // FILE D'ATTENTE CUISINE (delta, idempotent, hub primaire)
+      const kitchenWork = enqueueKitchenPrint({
         tableId,
         orderLabel: kitchenOrderLabel,
-        items: items.map((i) => ({ ...i })),
-        orderNote,
-        globalSupplements: activeSupplements,
+        items: orderItems.map((i) => ({ ...i })),
+        orderNote: liveNote,
+        globalSupplements: liveSupplements,
         printers,
       });
 
-      if (result.status === "blocked_unmapped") {
-        toast.error("Catégories non associées à une imprimante cuisine", {
-          description: result.unmappedNames.join(", "),
-          duration: 8000,
-        });
-      } else if (result.status === "error") {
-        toast.error("Impossible d'envoyer en cuisine", {
-          description: result.message,
-        });
-      } else if (result.status === "enqueued") {
-        toast.success(isOccupied ? "Mise à jour envoyée en cuisine" : "Commande envoyée en cuisine");
-        wakePrintQueueDaemon();
-      } else if (result.status === "noop" && result.reason === "empty_delta") {
-        console.log("[KITCHEN] No delta to print for", tableId);
-      } else if (result.status === "noop" && result.reason === "duplicate") {
-        console.log("[KITCHEN] Duplicate idempotency key — already queued");
-      }
-    } catch (err) {
-      console.error("Impossible de lancer l'impression cuisine", err);
-      toast.error("Erreur lors de l'envoi cuisine");
-    }
+      const [tableResult, kitchenResult] = await Promise.allSettled([tableWork, kitchenWork]);
 
-    onClose();
+      if (kitchenResult.status === "fulfilled") {
+        const result = kitchenResult.value;
+        if (result.status === "blocked_unmapped") {
+          toast.error("Catégories non associées à une imprimante cuisine", {
+            description: result.unmappedNames.join(", "),
+            duration: 8000,
+          });
+        } else if (result.status === "error") {
+          toast.error("Impossible d'envoyer en cuisine", { description: result.message });
+        } else if (result.status === "enqueued") {
+          toast.success(isOccupied ? "Mise à jour envoyée en cuisine" : "Commande envoyée en cuisine");
+          wakePrintQueueDaemon();
+        }
+      } else {
+        console.error("Impossible de lancer l'impression cuisine", kitchenResult.reason);
+        toast.error("Erreur lors de l'envoi cuisine");
+      }
+
+      if (tableResult.status === "rejected") {
+        // Stay open: validating again is safe (kitchen lines already queued are skipped).
+        console.error("[VALIDATE] mise à jour table échouée", tableResult.reason);
+        toast.error("Table non mise à jour", {
+          description: "Vérifiez la connexion puis appuyez à nouveau sur Valider.",
+        });
+        return;
+      }
+
+      onClose();
+    } finally {
+      validatingRef.current = false;
+      setValidating(false);
+    }
   };
 
   const handleCheckout = async () => {
-    // --- SAUVEGARDE DES DONNEES POUR IMPRESSION ---
-    const itemsToPrint = [...items];
-    const totalToPrint = total;
-    // ----------------------------------------------
-
-    // Déterminer le type de commande et le label correct
-    const orderType = isEmporter ? "emporter" : "table";
-    const orderOrTableNumber = isEmporter ? tableNumber : tableNumber;
-    const receiptLabel: string | number = isEmporter
-      ? `À EMPORTER — Commande #${tableNumber}`
-      : tableNumber;
-
-    // Enregistrer dans l'historique du Rapport Z (AVANT de vider l'ordre)
-    // Si le Z Report échoue, on arrête ici — on ne libère pas la table
-    // pour éviter de perdre une vente sans l'avoir enregistrée.
+    if (checkingOutRef.current) return;
+    checkingOutRef.current = true;
     try {
-      await recordZReport(itemsToPrint, orderType, orderOrTableNumber, []);
-    } catch (err) {
-      console.error("[CHECKOUT] Z Report a échoué — paiement annulé:", err);
-      toast.error("Erreur d'enregistrement du Rapport Z. Paiement non finalisé.", { duration: 7000 });
-      return; // Aborting — table stays occupied
-    }
+      // --- SAUVEGARDE DES DONNEES POUR IMPRESSION (état le plus récent) ---
+      const live = useTableOrdersStore.getState();
+      const itemsToPrint = [...(live.orders[tableId] ?? [])];
+      const supplementsToPrint = live.orderSupplements[tableId] ?? [];
+      const totalToPrint = cartSubtotal(itemsToPrint);
+      // ----------------------------------------------
 
-    playCashSound();
+      // Déterminer le type de commande et le label correct
+      const orderType = isEmporter ? "emporter" : "table";
+      const orderOrTableNumber = isEmporter ? tableNumber : tableNumber;
+      const receiptLabel: string | number = isEmporter
+        ? `À EMPORTER — Commande #${tableNumber}`
+        : tableNumber;
 
-    // 1. Clear items + note
-    clearOrder(tableId);
-    // 2. Update DB to free the table
-    await updateTable(tableId, {
-      status: "libre",
-      orderTotal: 0,
-      occupiedSince: null as any,
-      parentTableId: null,
-    });
-
-    // 3. Free merged children (only relevant for table orders, not emporter)
-    if (!isEmporter) {
-      const children = tables.filter(t => t.parentTableId === tableId);
-      for (const child of children) {
-        await updateTable(child.id, {
-          status: "libre",
-          occupiedSince: null as any,
-          orderTotal: 0,
-          parentTableId: null
-        });
+      // Enregistrer dans l'historique du Rapport Z (AVANT de vider l'ordre)
+      // Si le Z Report échoue, on arrête ici — on ne libère pas la table
+      // pour éviter de perdre une vente sans l'avoir enregistrée.
+      try {
+        await recordZReport(itemsToPrint, orderType, orderOrTableNumber, []);
+      } catch (err) {
+        console.error("[CHECKOUT] Z Report a échoué — paiement annulé:", err);
+        toast.error("Erreur d'enregistrement du Rapport Z. Paiement non finalisé.", { duration: 7000 });
+        return; // Aborting — table stays occupied
       }
+
+      playCashSound();
+
+      // 1. Clear items + note
+      clearOrder(tableId);
+      // 2. Update DB to free the table (+ merged children in parallel)
+      const children = isEmporter
+        ? []
+        : useTableGlobalState.getState().tables.filter((t) => t.parentTableId === tableId);
+      await Promise.all([
+        updateTable(tableId, {
+          status: "libre",
+          orderTotal: 0,
+          occupiedSince: null as any,
+          parentTableId: null,
+        }),
+        ...children.map((child) =>
+          updateTable(child.id, {
+            status: "libre",
+            occupiedSince: null as any,
+            orderTotal: 0,
+            parentTableId: null,
+          }),
+        ),
+      ]);
+
+      // --- IMPRESSION CAISSE (file d'attente — pas d'attente Bluetooth) ---
+      await runCashierReceiptPrint({
+        printers,
+        items: itemsToPrint,
+        total: totalToPrint,
+        label: receiptLabel,
+        globalSupplements: supplementsToPrint,
+        tableId,
+      });
+
+      onClose();
+    } finally {
+      checkingOutRef.current = false;
     }
-
-    // --- IMPRESSION CAISSE (file d'attente — pas d'attente Bluetooth) ---
-    await runCashierReceiptPrint({
-      printers,
-      items: itemsToPrint,
-      total: totalToPrint,
-      label: receiptLabel,
-      globalSupplements: activeSupplements,
-      tableId,
-    });
-
-    onClose();
   };
 
   const handleReprintKitchen = async () => {
@@ -841,6 +893,7 @@ export function TableOrderSidebar({ tableId, tableNumber, mergedIds, onClose }: 
             onNoteChange={handleNoteChange}
             onValidate={handleValidateOrder}
             onCheckout={handleOpenCheckout}
+            validating={validating}
             onReprintKitchen={handleReprintKitchen}
             onAddSupplement={(item) => {
               setActiveSupplementItem(item);
@@ -975,10 +1028,10 @@ export function TableOrderSidebar({ tableId, tableNumber, mergedIds, onClose }: 
                       <div className="flex gap-2">
                         <button
                           onClick={handleValidateOrder}
-                          disabled={items.length === 0}
+                          disabled={items.length === 0 || validating}
                           className="flex-1 rounded-xl bg-secondary py-3.5 text-sm font-bold text-secondary-foreground shadow-sm transition-all active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed"
                         >
-                          Mettre à jour
+                          {validating ? "Envoi…" : "Mettre à jour"}
                         </button>
                         {!isServeur && (
                           <button
@@ -1002,12 +1055,12 @@ export function TableOrderSidebar({ tableId, tableNumber, mergedIds, onClose }: 
                   ) : (
                     <button
                       onClick={handleValidateOrder}
-                      disabled={items.length === 0}
+                      disabled={items.length === 0 || validating}
                       className="flex w-full items-center justify-center gap-2 rounded-xl bg-primary py-3.5 text-sm font-bold text-primary-foreground shadow-lg transition-all active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50"
                     >
                       <CheckCircle2 className="h-4 w-4" />
-                      Valider la commande
-                      {itemCount > 0 && (
+                      {validating ? "Envoi en cours…" : "Valider la commande"}
+                      {!validating && itemCount > 0 && (
                         <span className="ml-1 opacity-80">— {formatDA(total)}</span>
                       )}
                     </button>

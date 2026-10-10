@@ -60,6 +60,13 @@ export class RealtimeManager {
   private _backoffIndex = 0;
   private _reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private _isFirstSubscription = true;
+  /**
+   * Identifies the current channel. removeChannel() reports `CLOSED` on the OLD
+   * channel; treating that as a lost connection scheduled another reconnect,
+   * which removed the new channel, which reported CLOSED again — an endless
+   * teardown/reload loop. Status callbacks of a superseded channel are ignored.
+   */
+  private _subSeq = 0;
 
   constructor(options: RealtimeManagerOptions) {
     this._name = options.channelName;
@@ -118,6 +125,7 @@ export class RealtimeManager {
   async destroy(): Promise<void> {
     if (this._destroyed) return;
     this._destroyed = true;
+    this._subSeq++;
     this._clearReconnectTimer();
     await this._removeChannel();
     this._initialized = false;
@@ -129,9 +137,13 @@ export class RealtimeManager {
   private _subscribe(): void {
     if (this._destroyed) return;
 
+    // Invalide d'abord les callbacks de l'ancien channel (voir _subSeq).
+    const seq = ++this._subSeq;
+
     // Toujours supprimer l'ancien channel avant d'en créer un nouveau
     void this._removeChannel().then(() => {
-      if (this._destroyed) return;
+      // destroyed, ou une subscription plus récente a pris le relais
+      if (this._destroyed || seq !== this._subSeq) return;
 
       let ch = supabase.channel(this._name);
 
@@ -146,6 +158,7 @@ export class RealtimeManager {
       }
 
       ch.subscribe((status, err) => {
+        if (seq !== this._subSeq) return; // channel remplacé — statut obsolète
         this._handleStatus(status, err);
       });
 
@@ -162,6 +175,7 @@ export class RealtimeManager {
         this._log("SUBSCRIBED ✅");
         this._backoffIndex = 0; // Reset backoff après succès
         this._reconnecting = false;
+        this._clearReconnectTimer();
         
         if (this._isFirstSubscription) {
           this._isFirstSubscription = false;
