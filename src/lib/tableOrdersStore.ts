@@ -45,6 +45,21 @@ const upsertTimers: Record<string, ReturnType<typeof setTimeout> | undefined> = 
 const inFlight: Record<string, number> = {};
 const sentStamps: Record<string, number[]> = {};
 
+// ── Stale-snapshot protection ────────────────────────────────────────────────
+// A full reload (reconnect, foreground, first load) fetches every order, then
+// REPLACES the store. If a live event for a table lands while that fetch is in
+// flight, the snapshot is older than the event — applying it dropped the new
+// order, and the Caisse saw the table without its items (0 DA) until something
+// else changed. Remember when each table last got a live event; a reload keeps
+// the live version of any table touched after the reload began, and only the
+// newest of overlapping reloads is applied.
+const liveEventAt: Record<string, number> = {};
+let resyncSeq = 0;
+
+function touchedSince(tableId: string, startedAt: number): boolean {
+  return (liveEventAt[tableId] ?? 0) >= startedAt;
+}
+
 function hasLocalPendingWrite(tableId: string): boolean {
   return upsertTimers[tableId] !== undefined || (inFlight[tableId] ?? 0) > 0;
 }
@@ -251,6 +266,8 @@ export const useTableOrdersStore = create<TableOrdersState>((set, get) => ({
 // ── Resync depuis Supabase ─────────────────────────────────────────────────────
 
 async function resyncTableOrders(): Promise<void> {
+  const seq = ++resyncSeq;
+  const startedAt = Date.now();
   const { data, error } = await supabase
     .from("table_orders")
     .select("table_id, items, note, global_supplements");
@@ -259,21 +276,26 @@ async function resyncTableOrders(): Promise<void> {
     console.error("[table_orders] resync error:", error.message);
     throw error;
   }
+  // A newer reload started while this one was fetching — its result wins.
+  if (seq !== resyncSeq) return;
 
   const orders: Record<string, CartItem[]> = {};
   const notes: Record<string, string> = {};
   const supplements: Record<string, GlobalSupplement[]> = {};
-  // Keep this device's unsaved edits — the snapshot predates them.
+  // Keep this device's unsaved edits, and any order a live event touched after
+  // this fetch began — the snapshot predates both.
   const local = useTableOrdersStore.getState();
+  const keepLocal = (tableId: string) =>
+    hasLocalPendingWrite(tableId) || touchedSince(tableId, startedAt);
   for (const tableId of Object.keys(local.orders)) {
-    if (!hasLocalPendingWrite(tableId)) continue;
+    if (!keepLocal(tableId)) continue;
     orders[tableId] = local.orders[tableId] ?? [];
     notes[tableId] = local.orderNotes[tableId] ?? "";
     supplements[tableId] = local.orderSupplements[tableId] ?? [];
   }
   for (const row of data ?? []) {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    if (hasLocalPendingWrite((row as any).table_id)) continue;
+    if (keepLocal((row as any).table_id)) continue;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     orders[(row as any).table_id] = (row as any).items as CartItem[];
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -286,8 +308,45 @@ async function resyncTableOrders(): Promise<void> {
 
 // ── Payload handler (logique métier Realtime inchangée) ───────────────────────
 
+/**
+ * Load one table's order from Supabase into the store — used when a device opens
+ * an occupied table (server tablets included) so it never starts from an empty
+ * cart and then overwrites the saved order with a single new line.
+ * Live data wins: skipped when this device has unsaved edits for the table, or a
+ * live event arrived while the request was in flight.
+ * @returns true when the table has a saved order (stop retrying), false otherwise.
+ */
+export async function loadOrderFromDB(tableId: string): Promise<boolean> {
+  const startedAt = Date.now();
+  const { data, error } = await supabase
+    .from("table_orders")
+    .select("items, note, global_supplements")
+    .eq("table_id", tableId)
+    .maybeSingle();
+  if (error) {
+    console.error("[table_orders] loadOrderFromDB error:", error.message);
+    return false;
+  }
+  const items = (data?.items as CartItem[] | null | undefined) ?? [];
+  if (!data || items.length === 0) return false;
+  if (hasLocalPendingWrite(tableId) || touchedSince(tableId, startedAt)) return true;
+
+  const store = useTableOrdersStore.getState();
+  store._patchOrder(tableId, items);
+  store._patchNote(tableId, data.note ?? "");
+  store._patchSupplements(
+    tableId,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    ((data as any).global_supplements as GlobalSupplement[] | null) ?? [],
+  );
+  return true;
+}
+
 function handleTableOrderPayload(payload: PostgresPayload): void {
   const store = useTableOrdersStore.getState();
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const eventTableId = ((payload.eventType === "DELETE" ? payload.old : payload.new) as any)?.table_id;
+  if (typeof eventTableId === "string") liveEventAt[eventTableId] = Date.now();
   if (payload.eventType === "DELETE") {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const tableId = (payload.old as any).table_id as string;

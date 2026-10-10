@@ -11,7 +11,7 @@ import { type Category, type Product, type ProductOption, formatDA } from "@/dat
 import { useMenuStore } from "@/lib/menuStore";
 import { type CartItem, cartSubtotal, lineTotal } from "@/lib/cart";
 import { useTableGlobalState, updateTableRecord } from "@/lib/tableStore";
-import { useTableOrdersStore } from "@/lib/tableOrdersStore";
+import { useTableOrdersStore, loadOrderFromDB } from "@/lib/tableOrdersStore";
 import { useSessionStore } from "@/lib/authStore";
 import { supabase } from "@/lib/supabase";
 import { usePrinterStore } from "@/lib/printerStore";
@@ -516,42 +516,26 @@ export function TableOrderSidebar({ tableId, tableNumber, mergedIds, onClose }: 
   useEffect(() => {
     let mounted = true;
 
-    // Seulement si la table est censée être occupée et que c'est la caisse qui ouvre
-    if (isOccupied && !isServeur) {
-      // Différer le fetch de 16ms pour laisser le premier rendu s'afficher
+    // Table occupée: charger la commande enregistrée — pour la caisse ET pour le
+    // serveur. Un serveur qui ouvre une table occupée avec un panier local vide
+    // (événement temps réel manqué) et ajoute un article écrasait toute la commande
+    // enregistrée par cet unique article.
+    if (isOccupied) {
       const fetchOrderData = async (retries = 3) => {
         for (let i = 0; i < retries; i++) {
           if (!mounted) return;
           try {
-            const { data, error } = await supabase
-              .from("table_orders")
-              .select("items, note, global_supplements")
-              .eq("table_id", tableId)
-              .maybeSingle();
-            
-            if (error) {
-              console.error("[CASHIER ORDER] Erreur SELECT table_orders:", error);
-              break; // Arrêter les retries si erreur réseau/SQL grave
-            }
-
-            if (data && data.items && (data.items as CartItem[]).length > 0) {
-              console.log("[CASHIER ORDER] Données récupérées avec succès:", data.items);
-              if (mounted) {
-                _patchOrder(tableId, data.items as CartItem[]);
-                _patchNote(tableId, data.note || "");
-                // Pour compatibilité avec les anciennes données qui n'ont peut-être pas la colonne:
-                // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                _patchSupplements(tableId, ((data as any).global_supplements as GlobalSupplement[]) || []);
-              }
-              break; // Succès, on arrête les retries
-            } else if (i < retries - 1) {
-              // Si pas de données mais que la table est "occupee", on attend un peu
-              // pour pallier au timing (flushOrder du Serveur peut être en cours)
-              console.log(`[CASHIER ORDER] Aucun item trouvé, retry ${i + 1}/${retries}...`);
+            // loadOrderFromDB ne remplace jamais des modifications locales non
+            // enregistrées ni une donnée temps réel plus récente.
+            const found = await loadOrderFromDB(tableId);
+            if (found) break; // Succès, on arrête les retries
+            if (i < retries - 1) {
+              // Table "occupee" sans commande visible: le flushOrder du serveur peut
+              // être en cours — on attend un peu.
               await new Promise(r => setTimeout(r, 800));
             }
           } catch (err) {
-            console.error("[CASHIER ORDER] Exception SELECT:", err);
+            console.error("[ORDER LOAD] Exception:", err);
             break;
           }
         }

@@ -95,16 +95,50 @@ async function fetchTablesFromDB(): Promise<TableItem[]> {
   });
 }
 
+// ── Stale-snapshot protection (same idea as tableOrdersStore) ────────────────
+// A full reload replaces every table. A live event — or this device's own
+// optimistic update — that lands while the fetch is in flight is NEWER than the
+// snapshot; applying the snapshot over it reverted a freshly validated table
+// (status / total) until the next change. Tables touched after the reload began
+// keep their current version; only the newest of overlapping reloads applies.
+const tableTouchedAt: Record<string, number> = {};
+let tableReloadSeq = 0;
+
+function tableTouchedSince(id: string, startedAt: number): boolean {
+  return (tableTouchedAt[id] ?? 0) >= startedAt;
+}
+
 export async function reloadTableStore(isInitialLoad = false) {
   const store = useTableGlobalState.getState();
   if (isInitialLoad) store.setLoading(true);
+  const seq = ++tableReloadSeq;
+  const startedAt = Date.now();
   try {
     const [fetchedRooms, fetchedTables] = await Promise.all([
       fetchRoomsFromDB(),
       fetchTablesFromDB(),
     ]);
+    if (seq !== tableReloadSeq) return; // a newer reload supersedes this one
     store.setRooms(fetchedRooms);
-    store.setTables(fetchedTables);
+    store.setTables((prev) => {
+      const prevById = new Map(prev.map((t) => [t.id, t]));
+      const merged: TableItem[] = [];
+      const seen = new Set<string>();
+      for (const fetched of fetchedTables) {
+        seen.add(fetched.id);
+        if (tableTouchedSince(fetched.id, startedAt)) {
+          const current = prevById.get(fetched.id);
+          if (current) merged.push(current); // else: deleted after the fetch began
+        } else {
+          merged.push(fetched);
+        }
+      }
+      // Created after the fetch began: not in the snapshot yet.
+      for (const t of prev) {
+        if (!seen.has(t.id) && tableTouchedSince(t.id, startedAt)) merged.push(t);
+      }
+      return merged.sort((a, b) => a.number - b.number);
+    });
   } catch (error) {
     console.error("Error reloading table store:", error);
     throw error;
@@ -136,6 +170,9 @@ function handleTableRoomPayload(payload: PostgresPayload): void {
   }
 
   if (payload.table === "tables") {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const touchedId = ((payload.eventType === "DELETE" ? payload.old : payload.new) as any)?.id;
+    if (typeof touchedId === "string") tableTouchedAt[touchedId] = Date.now();
     if (payload.eventType === "DELETE") {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       store.setTables((prev) => prev.filter(t => t.id !== (payload.old as any).id));
@@ -214,7 +251,8 @@ export function useTableSync(enabled = true) {
  */
 export async function updateTableRecord(id: string, table: Partial<TableItem>): Promise<void> {
   const { setTables } = useTableGlobalState.getState();
-  // Optimistic update
+  // Optimistic update — also protects it from an in-flight reload's older snapshot.
+  tableTouchedAt[id] = Date.now();
   setTables((prev) => prev.map((t) => (t.id === id ? { ...t, ...table } : t)));
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
